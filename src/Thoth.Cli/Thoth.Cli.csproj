@@ -1,0 +1,26 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Thoth.Core\Thoth.Core.csproj" />
+    <ProjectReference Include="..\Thoth.Llm\Thoth.Llm.csproj" />
+    <ProjectReference Include="..\Thoth.Tools\Thoth.Tools.csproj" />
+    <ProjectReference Include="..\Thoth.Memory\Thoth.Memory.csproj" />
+    <ProjectReference Include="..\Thoth.Sandbox\Thoth.Sandbox.csproj" />
+    <ProjectReference Include="..\Thoth.Runtime\Thoth.Runtime.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Configuration.Json" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.0" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+</Project>

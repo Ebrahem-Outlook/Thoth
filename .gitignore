@@ -1,0 +1,11 @@
+bin/
+obj/
+.vs/
+.idea/
+*.user
+*.suo
+*.db
+*.sqlite
+data/memory/
+data/runs/
+TestResults/
