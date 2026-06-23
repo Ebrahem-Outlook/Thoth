@@ -1,0 +1,394 @@
+<main class="shell" [class.sidebar-collapsed]="!sidebarOpen()" [class.panel-collapsed]="!rightPanelOpen()">
+  <aside class="sidebar">
+    <div class="brand-row">
+      <button class="icon-button mobile-only" type="button" (click)="sidebarOpen.set(!sidebarOpen())" aria-label="Toggle sidebar">
+        <svg lucideMenu size="18"></svg>
+      </button>
+      <div class="brand-mark">T</div>
+      <div class="brand-copy">
+        <strong>Thoth</strong>
+        <span>{{ config()?.provider || 'offline' }} / {{ selectedModel() || 'local' }}</span>
+      </div>
+    </div>
+
+    <button class="new-chat" type="button" (click)="newConversation()">
+      <svg lucidePlus size="17"></svg>
+      <span>New chat</span>
+    </button>
+
+    <label class="search-box">
+      <svg lucideSearch size="16"></svg>
+      <input
+        type="search"
+        [ngModel]="query()"
+        (ngModelChange)="query.set($event); loadConversations()"
+        placeholder="Search chats"
+      />
+    </label>
+
+    <div class="conversation-list">
+      @if (pinnedConversations().length) {
+        <div class="list-label">Pinned</div>
+        @for (conversation of pinnedConversations(); track conversation.id) {
+          <button
+            class="conversation-item"
+            [class.active]="activeConversationId() === conversation.id"
+            type="button"
+            (click)="openConversation(conversation.id)"
+          >
+            <svg lucideMessageSquare size="16"></svg>
+            <span>{{ conversation.title }}</span>
+            <small>{{ conversation.messageCount }}</small>
+            <button class="ghost-action" type="button" (click)="togglePinned(conversation, $event)" aria-label="Unpin">
+              <svg lucidePin size="14"></svg>
+            </button>
+          </button>
+        }
+      }
+
+      <div class="list-label">Recent</div>
+      @for (conversation of recentConversations(); track conversation.id) {
+        <button
+          class="conversation-item"
+          [class.active]="activeConversationId() === conversation.id"
+          type="button"
+          (click)="openConversation(conversation.id)"
+        >
+          <svg lucideMessageSquare size="16"></svg>
+          <span>{{ conversation.title }}</span>
+          <small>{{ conversation.messageCount }}</small>
+          <span class="row-actions">
+            <button class="ghost-action" type="button" (click)="togglePinned(conversation, $event)" aria-label="Pin">
+              <svg lucidePin size="14"></svg>
+            </button>
+            <button class="ghost-action" type="button" (click)="archiveConversation(conversation, $event)" aria-label="Archive">
+              <svg lucideArchive size="14"></svg>
+            </button>
+          </span>
+        </button>
+      } @empty {
+        <div class="empty-list">
+          <svg lucideSparkles size="18"></svg>
+          <span>No chats yet</span>
+        </div>
+      }
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="side-tab" type="button" (click)="setPanel('tools')">
+        <svg lucideWrench size="16"></svg>
+        <span>Tools</span>
+      </button>
+      <button class="side-tab" type="button" (click)="setPanel('memory')">
+        <svg lucideBrain size="16"></svg>
+        <span>Memory</span>
+      </button>
+      <button class="side-tab" type="button" (click)="setPanel('settings')">
+        <svg lucideSettings size="16"></svg>
+        <span>Settings</span>
+      </button>
+    </div>
+  </aside>
+
+  <section class="workspace">
+    <header class="topbar">
+      <button class="icon-button" type="button" (click)="sidebarOpen.set(!sidebarOpen())" aria-label="Toggle sidebar">
+        @if (sidebarOpen()) {
+          <svg lucideChevronLeft size="18"></svg>
+        } @else {
+          <svg lucideChevronRight size="18"></svg>
+        }
+      </button>
+      <div class="conversation-heading">
+        <strong>{{ selectedConversation()?.conversation?.title || 'Ask Thoth' }}</strong>
+        <span>
+          {{ useTools() ? 'tools on' : 'chat only' }}
+          @if (lastRun()) {
+            · {{ lastRun()?.succeeded ? 'run ok' : 'run failed' }}
+          }
+        </span>
+      </div>
+      <div class="top-actions">
+        @if (selectedConversation()?.conversation; as activeConversation) {
+          <button class="icon-button" type="button" (click)="deleteConversation(activeConversation)" aria-label="Delete conversation">
+            <svg lucideTrash2 size="18"></svg>
+          </button>
+        }
+        <button class="icon-button" type="button" (click)="refreshAll()" aria-label="Refresh">
+          <svg lucideRefreshCw size="18"></svg>
+        </button>
+        <button class="icon-button" type="button" (click)="rightPanelOpen.set(!rightPanelOpen())" aria-label="Toggle panel">
+          <svg lucidePanelRight size="18"></svg>
+        </button>
+      </div>
+    </header>
+
+    @if (error()) {
+      <div class="error-strip">
+        <svg lucideInfo size="16"></svg>
+        <span>{{ error() }}</span>
+        <button type="button" (click)="error.set('')" aria-label="Dismiss">
+          <svg lucideX size="15"></svg>
+        </button>
+      </div>
+    }
+
+    <section class="messages">
+      @if (!messages().length) {
+        <div class="welcome">
+          <div class="orb"><svg lucideBot size="34"></svg></div>
+          <h1>Thoth</h1>
+          <p>ابدأ بكلام طبيعي، ارفع صورة أو ملف، أو اطلب تعديل في المشروع.</p>
+          <div class="prompt-grid">
+            <button type="button" (click)="composerText.set('افهم المشروع الحالي واقترح أقوى خطوة تطوير بعدها')">
+              <span>Project read</span>
+              <small>Context and next move</small>
+            </button>
+            <button type="button" (click)="composerText.set('ابني لي API endpoint جديد ووضح الخطة قبل التنفيذ')">
+              <span>Backend task</span>
+              <small>Plan with tools</small>
+            </button>
+            <button type="button" (click)="composerText.set('حلل الصورة اللي هرفعها واطلع منها المطلوب')">
+              <span>Image input</span>
+              <small>Vision-ready</small>
+            </button>
+            <button type="button" (click)="composerText.set('راجع آخر رد واحفظ التفضيلات المهمة في الذاكرة')">
+              <span>Memory</span>
+              <small>Personal context</small>
+            </button>
+          </div>
+        </div>
+      }
+
+      @for (message of messages(); track message.id) {
+        <article class="message" [class.user]="message.role === 'User'" [class.assistant]="message.role === 'Assistant'">
+          <div class="avatar">
+            @if (message.role === 'User') {
+              <span>U</span>
+            } @else {
+              <svg lucideBot size="17"></svg>
+            }
+          </div>
+          <div class="message-body">
+            <div class="message-meta">
+              <strong>{{ message.role === 'User' ? 'You' : 'Thoth' }}</strong>
+              <span>{{ message.createdAt | date: 'shortTime' }}</span>
+              @if (message.intent) {
+                <em>{{ message.intent }}</em>
+              }
+            </div>
+
+            @if (message.attachments.length) {
+              <div class="attachments">
+                @for (attachment of message.attachments; track attachment.id) {
+                  <a class="attachment" [href]="downloadAttachment(attachment.id)" target="_blank" rel="noopener">
+                    @if (attachment.contentType.startsWith('image/')) {
+                      <svg lucideImage size="16"></svg>
+                    } @else {
+                      <svg lucideFile size="16"></svg>
+                    }
+                    <span>{{ attachment.fileName }}</span>
+                    <small>{{ formatBytes(attachment.sizeBytes) }}</small>
+                    <svg lucideDownload size="14"></svg>
+                  </a>
+                }
+              </div>
+            }
+
+            <div class="markdown" [innerHTML]="message.content | markdown"></div>
+
+            @if (message.role === 'Assistant') {
+              <div class="message-actions">
+                <button type="button" (click)="copy(message.content)" aria-label="Copy">
+                  <svg lucideCopy size="15"></svg>
+                </button>
+                <button type="button" (click)="setPanel('run')" aria-label="Run details">
+                  <svg lucideMoreVertical size="15"></svg>
+                </button>
+              </div>
+            }
+          </div>
+        </article>
+      }
+
+      @if (busy()) {
+        <article class="message assistant pending">
+          <div class="avatar"><svg lucideBot size="17"></svg></div>
+          <div class="message-body">
+            <div class="thinking">
+              <span></span><span></span><span></span>
+            </div>
+          </div>
+        </article>
+      }
+    </section>
+
+    <footer class="composer-zone">
+      @if (pendingFiles().length) {
+        <div class="pending-files">
+          @for (item of pendingFiles(); track item.file.name + item.file.size; let index = $index) {
+            <div class="pending-file">
+              @if (item.previewUrl) {
+                <img [src]="item.previewUrl" alt="" />
+              } @else {
+                <svg lucideFile size="16"></svg>
+              }
+              <span>{{ item.file.name }}</span>
+              <small>{{ formatBytes(item.file.size) }}</small>
+              <button type="button" (click)="removeFile(index)" aria-label="Remove file">
+                <svg lucideX size="14"></svg>
+              </button>
+            </div>
+          }
+        </div>
+      }
+
+      <div class="composer">
+        <input #fileInput type="file" multiple hidden (change)="onFilesSelected($event)" />
+        <button class="icon-button" type="button" (click)="fileInput.click()" aria-label="Attach files">
+          <svg lucidePaperclip size="19"></svg>
+        </button>
+        <textarea
+          #messageInput
+          [ngModel]="composerText()"
+          (ngModelChange)="composerText.set($event)"
+          (keydown)="onKeydown($event)"
+          rows="1"
+          placeholder="Message Thoth"
+        ></textarea>
+        <button class="icon-button" type="button" (click)="startDictation()" aria-label="Voice input">
+          <svg lucideMic size="18"></svg>
+        </button>
+        <button class="send-button" type="button" [disabled]="busy() || (!composerText().trim() && !pendingFiles().length)" (click)="send()" aria-label="Send">
+          <svg lucideSend size="18"></svg>
+        </button>
+      </div>
+      <div class="composer-options">
+        <label>
+          <input type="checkbox" [ngModel]="useTools()" (ngModelChange)="useTools.set($event)" />
+          <span>Tools</span>
+        </label>
+        <label>
+          <span>Model</span>
+          <input [ngModel]="selectedModel()" (ngModelChange)="selectedModel.set($event)" />
+        </label>
+        <label>
+          <span>Steps</span>
+          <input type="number" min="1" max="24" [ngModel]="maxSteps()" (ngModelChange)="maxSteps.set(+$event)" />
+        </label>
+      </div>
+    </footer>
+  </section>
+
+  <aside class="inspector">
+    <div class="inspector-tabs">
+      <button type="button" [class.active]="activePanel() === 'run'" (click)="setPanel('run')">
+        <svg lucideSparkles size="16"></svg>
+      </button>
+      <button type="button" [class.active]="activePanel() === 'tools'" (click)="setPanel('tools')">
+        <svg lucideWrench size="16"></svg>
+      </button>
+      <button type="button" [class.active]="activePanel() === 'memory'" (click)="setPanel('memory')">
+        <svg lucideBrain size="16"></svg>
+      </button>
+      <button type="button" [class.active]="activePanel() === 'settings'" (click)="setPanel('settings')">
+        <svg lucideSettings size="16"></svg>
+      </button>
+    </div>
+
+    @if (activePanel() === 'run') {
+      <section class="panel-section">
+        <h2>Run</h2>
+        @if (lastRun()) {
+          <div class="run-status" [class.ok]="lastRun()?.succeeded">
+            <strong>{{ lastRun()?.succeeded ? 'Succeeded' : 'Needs attention' }}</strong>
+            <span>{{ lastRun()?.runId }}</span>
+          </div>
+          <div class="steps">
+            @for (step of lastRun()?.steps; track step.index) {
+              <div class="step">
+                <span>{{ step.index }}</span>
+                <div>
+                  <strong>{{ step.invocation?.toolName || 'thought' }}</strong>
+                  <p>{{ step.thought }}</p>
+                  @if (step.result) {
+                    <pre>{{ step.result.content }}</pre>
+                  }
+                </div>
+              </div>
+            }
+          </div>
+        } @else {
+          <div class="panel-empty">No tool run yet.</div>
+        }
+      </section>
+    }
+
+    @if (activePanel() === 'tools') {
+      <section class="panel-section">
+        <h2>Tools</h2>
+        <div class="tool-list">
+          @for (tool of tools(); track tool.name) {
+            <details>
+              <summary>{{ tool.name }}</summary>
+              <p>{{ tool.description }}</p>
+              @for (parameter of tool.parameters; track parameter.name) {
+                <code>{{ parameter.name }}: {{ parameter.type }}</code>
+              }
+            </details>
+          }
+        </div>
+      </section>
+    }
+
+    @if (activePanel() === 'memory') {
+      <section class="panel-section">
+        <h2>Memory</h2>
+        <label class="panel-search">
+          <svg lucideSearch size="15"></svg>
+          <input [ngModel]="memoryQuery()" (ngModelChange)="searchMemory($event)" placeholder="Search memory" />
+        </label>
+        <div class="memory-list">
+          @for (memory of memories(); track memory.id) {
+            <div class="memory-card">
+              <strong>{{ memory.scope }}</strong>
+              <p>{{ memory.content }}</p>
+              <span>{{ memory.createdAt | date: 'short' }}</span>
+            </div>
+          } @empty {
+            <div class="panel-empty">No memory found.</div>
+          }
+        </div>
+      </section>
+    }
+
+    @if (activePanel() === 'settings') {
+      <section class="panel-section">
+        <h2>Settings</h2>
+        <div class="settings-grid">
+          <label>
+            <span>Provider</span>
+            <input [value]="config()?.provider || 'auto'" readonly />
+          </label>
+          <label>
+            <span>Model</span>
+            <input [ngModel]="selectedModel()" (ngModelChange)="selectedModel.set($event)" />
+          </label>
+          <label>
+            <span>Max steps</span>
+            <input type="number" min="1" max="24" [ngModel]="maxSteps()" (ngModelChange)="maxSteps.set(+$event)" />
+          </label>
+          <label class="toggle-row">
+            <input type="checkbox" [ngModel]="useTools()" (ngModelChange)="useTools.set($event)" />
+            <span>Use tools</span>
+          </label>
+        </div>
+        <div class="feature-pills">
+          @for (feature of config()?.features || []; track feature) {
+            <span>{{ feature }}</span>
+          }
+        </div>
+      </section>
+    }
+  </aside>
+</main>

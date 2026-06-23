@@ -48,13 +48,14 @@ public static class CliApp
 
     private static IHost BuildHost(string[] args)
     {
+        var workspaceRoot = ThothPathDiscovery.FindWorkspaceRoot(Environment.CurrentDirectory);
         var builder = Host.CreateApplicationBuilder(args);
         builder.Logging.ClearProviders();
         builder.Logging.AddSimpleConsole();
         builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
         builder.Configuration
-            .AddJsonFile(Path.Combine(Environment.CurrentDirectory, "configs", "thoth.json"), optional: true)
+            .AddJsonFile(Path.Combine(workspaceRoot, "configs", "thoth.json"), optional: true)
             .AddEnvironmentVariables("THOTH_");
 
         builder.Services.AddThothRuntime(builder.Configuration);

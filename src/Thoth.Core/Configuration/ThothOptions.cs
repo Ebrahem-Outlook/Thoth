@@ -15,11 +15,11 @@ public sealed class ThothOptions
 
 public sealed class ModelOptions
 {
-    public string Provider { get; set; } = "local";
+    public string Provider { get; set; } = "auto";
 
-    public string Model { get; set; } = "thoth-local";
+    public string Model { get; set; } = "gpt-5.5";
 
-    public string Endpoint { get; set; } = "https://api.openai.com/v1/chat/completions";
+    public string Endpoint { get; set; } = "https://api.openai.com/v1/responses";
 
     public string ApiKeyEnvironmentVariable { get; set; } = "OPENAI_API_KEY";
 

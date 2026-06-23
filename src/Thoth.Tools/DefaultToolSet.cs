@@ -1,5 +1,6 @@
 using Thoth.Core.Tools;
 using Thoth.Tools.FileSystem;
+using Thoth.Tools.Http;
 using Thoth.Tools.Memory;
 using Thoth.Tools.Shell;
 
@@ -11,11 +12,15 @@ public static class DefaultToolSet
     {
         return new ToolRegistry()
             .Register(new WorkspaceMapTool())
+            .Register(new FileListTool())
+            .Register(new FileInfoTool())
             .Register(new FileReadTool())
             .Register(new FileSearchTool())
             .Register(new FileWriteTool())
             .Register(new MemorySearchTool())
+            .Register(new MemoryRecentTool())
             .Register(new MemoryWriteTool())
+            .Register(new HttpGetTool(new HttpClient()))
             .Register(new ShellRunTool(shellTimeout));
     }
 }

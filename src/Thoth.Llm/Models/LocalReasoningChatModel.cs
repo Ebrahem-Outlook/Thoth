@@ -12,7 +12,11 @@ public sealed class LocalReasoningChatModel : IChatModel
         var transcript = string.Join("\n", request.Messages.Select(message => message.Content));
         var content = transcript.Contains("Return a JSON plan only", StringComparison.OrdinalIgnoreCase)
             ? CreatePlan(transcript)
-            : CreateFinalAnswer(transcript);
+            : transcript.Contains("Classify the user's message", StringComparison.OrdinalIgnoreCase)
+                ? CreateUnderstanding(transcript)
+                : transcript.Contains("Observations:", StringComparison.OrdinalIgnoreCase)
+                    ? CreateFinalAnswer(transcript)
+                    : CreateDirectReply(request);
 
         return Task.FromResult(new ChatResponse(content, "thoth-local"));
     }
@@ -103,6 +107,67 @@ public sealed class LocalReasoningChatModel : IChatModel
         return builder.ToString().Trim();
     }
 
+    private static string CreateUnderstanding(string transcript)
+    {
+        var message = ExtractAfterLabel(transcript, "User message:");
+        var lower = message.ToLowerInvariant();
+        var requiresTools =
+            lower.Contains("project") ||
+            lower.Contains("code") ||
+            lower.Contains("file") ||
+            lower.Contains("api") ||
+            lower.Contains("backend") ||
+            lower.Contains("frontend") ||
+            lower.Contains("angular") ||
+            lower.Contains("نفذ") ||
+            lower.Contains("ابني") ||
+            lower.Contains("عدل");
+
+        var payload = new
+        {
+            intent = requiresTools ? "workspace_task" : "general_chat",
+            topic = lower.Contains("angular") || lower.Contains("frontend") ? "frontend" :
+                lower.Contains("api") || lower.Contains("backend") ? "backend" : "general",
+            language = UnderstandingLanguage(message),
+            requiresTools,
+            requiresVision = transcript.Contains("image/", StringComparison.OrdinalIgnoreCase),
+            isLongContext = message.Length > 8000,
+            confidence = requiresTools ? 0.74 : 0.58,
+            summary = SingleLine(message, 180)
+        };
+
+        return JsonSerializer.Serialize(payload);
+    }
+
+    private static string CreateDirectReply(ChatRequest request)
+    {
+        var lastUser = request.Messages.LastOrDefault(message => message.Role == ChatRole.User);
+        var text = lastUser?.Content.Trim() ?? string.Empty;
+        var hasImage = lastUser?.Attachments?.Any(attachment => attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) == true;
+
+        var builder = new StringBuilder();
+        builder.AppendLine(UnderstandingLanguage(text) == "ar"
+            ? "فاهمك. دي إجابة الـ local fallback، وللذكاء الحقيقي شغّل OpenAI Responses من config/API key."
+            : "I understand. This is the local fallback response; enable the OpenAI Responses provider for stronger reasoning.");
+
+        if (!string.IsNullOrWhiteSpace(text))
+        {
+            builder.AppendLine();
+            builder.AppendLine(UnderstandingLanguage(text) == "ar" ? "ملخص طلبك:" : "Your request:");
+            builder.AppendLine($"- {SingleLine(text, 320)}");
+        }
+
+        if (hasImage)
+        {
+            builder.AppendLine();
+            builder.AppendLine(UnderstandingLanguage(text) == "ar"
+                ? "فيه صورة مرفوعة، لكن تحليل الصور الحقيقي يحتاج provider يدعم vision."
+                : "An image was attached; real image analysis requires a vision-capable provider.");
+        }
+
+        return builder.ToString().Trim();
+    }
+
     private static Dictionary<string, object?> Step(
         string thought,
         string tool,
@@ -185,6 +250,9 @@ public sealed class LocalReasoningChatModel : IChatModel
         var singleLine = value.Replace('\r', ' ').Replace('\n', ' ').Trim();
         return singleLine.Length <= maxLength ? singleLine : singleLine[..maxLength] + "...";
     }
+
+    private static string UnderstandingLanguage(string text) =>
+        text.Any(c => c >= 0x0600 && c <= 0x06FF) ? "ar" : "en";
 
     private static readonly HashSet<string> StopWords =
     [

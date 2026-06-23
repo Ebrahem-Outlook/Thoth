@@ -1,6 +1,6 @@
 # Thoth
 
-Thoth is a local-first AI agent platform built in .NET 8. It is structured as a real agent runtime, not a single chat wrapper: it has a planning loop, tool registry, memory store, execution policy, CLI, and minimal HTTP API.
+Thoth is a local-first AI agent platform built in .NET 8 and Angular. It has a real agent runtime, a ChatGPT-class web shell, conversation storage, attachment upload, memory, tools, execution policy, CLI, and HTTP API.
 
 ## Quick Start
 
@@ -9,6 +9,24 @@ dotnet build Thoth.sln
 dotnet test Thoth.sln
 dotnet run --project src/Thoth.Cli -- run "summarize this workspace"
 ```
+
+## Web App
+
+Run the backend:
+
+```powershell
+dotnet run --project src/Thoth.Api --urls http://127.0.0.1:5055
+```
+
+Run the Angular frontend:
+
+```powershell
+cd src/Thoth.Web
+npm install
+npm start
+```
+
+The frontend expects the API at `http://127.0.0.1:5055`.
 
 ## Commands
 
@@ -30,38 +48,37 @@ dotnet run --project src/Thoth.Api
 Available endpoints:
 
 - `GET /health`
-- `GET /tools`
+- `GET /api/client-config`
+- `GET /api/tools`
+- `GET /api/conversations`
+- `POST /api/conversations`
+- `GET /api/conversations/{id}`
+- `PATCH /api/conversations/{id}`
+- `DELETE /api/conversations/{id}`
+- `POST /api/chat`
+- `POST /api/conversations/{id}/messages`
+- `POST /api/conversations/{id}/messages/stream`
+- `POST /api/attachments`
+- `GET /api/attachments/{id}/download`
+- `GET /api/memory/search`
+- `POST /api/memory`
 - `POST /runs`
-- `GET /memory/search?query=...`
 
 ## Model Configuration
 
-Default mode is local and deterministic:
+Default mode is `auto`: it uses the OpenAI Responses API when `OPENAI_API_KEY` is available, otherwise it falls back to the local deterministic model.
 
 ```json
 {
   "Thoth": {
     "Model": {
-      "Provider": "local",
-      "Model": "thoth-local"
-    }
-  }
-}
-```
-
-To use an OpenAI-compatible chat completions endpoint, update `configs/thoth.json`:
-
-```json
-{
-  "Thoth": {
-    "Model": {
-      "Provider": "openai-compatible",
-      "Model": "gpt-4.1-mini",
-      "Endpoint": "https://api.openai.com/v1/chat/completions",
+      "Provider": "auto",
+      "Model": "gpt-5.5",
+      "Endpoint": "https://api.openai.com/v1/responses",
       "ApiKeyEnvironmentVariable": "OPENAI_API_KEY"
     }
   }
 }
 ```
 
-Then set the environment variable before running Thoth.
+To force local fallback, set `Provider` to `local`. To force the Responses API, set `Provider` to `openai-responses`.

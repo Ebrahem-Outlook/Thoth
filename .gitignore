@@ -9,3 +9,6 @@ obj/
 data/memory/
 data/runs/
 TestResults/
+src/Thoth.Web/.angular/
+src/Thoth.Web/dist/
+src/Thoth.Web/node_modules/

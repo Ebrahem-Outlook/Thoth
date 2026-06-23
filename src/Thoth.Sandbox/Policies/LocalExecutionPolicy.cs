@@ -10,8 +10,12 @@ public sealed class LocalExecutionPolicy(SandboxOptions options) : IExecutionPol
     {
         "workspace.map",
         "file.read",
+        "file.list",
+        "file.info",
         "file.search",
+        "http.get",
         "memory.search",
+        "memory.recent",
         "memory.write"
     };
 
