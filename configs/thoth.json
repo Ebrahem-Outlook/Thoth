@@ -4,10 +4,9 @@
     "DataDirectory": "data",
     "MaxAgentSteps": 8,
     "Model": {
-      "Provider": "auto",
-      "Model": "gpt-5.5",
-      "Endpoint": "https://api.openai.com/v1/responses",
-      "ApiKeyEnvironmentVariable": "OPENAI_API_KEY",
+      "Provider": "local",
+      "Model": "thoth-local",
+      "Endpoint": "http://localhost:11434/api/chat",
       "Temperature": 0.2
     },
     "Sandbox": {

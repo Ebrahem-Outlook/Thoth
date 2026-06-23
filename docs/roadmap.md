@@ -7,7 +7,7 @@
 - Tool registry
 - SQLite memory
 - Local deterministic model
-- OpenAI Responses adapter
+- Ollama local model adapter
 - CLI and minimal API
 - Safety policy
 - Initial tests
@@ -16,7 +16,7 @@ Status: implemented.
 
 ## Phase 2: Product Chat Surface
 
-- Angular ChatGPT-class shell
+- Angular full chat shell
 - Conversation history
 - Attachments and image uploads
 - Tool trace inspector

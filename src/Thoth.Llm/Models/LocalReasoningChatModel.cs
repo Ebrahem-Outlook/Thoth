@@ -147,8 +147,8 @@ public sealed class LocalReasoningChatModel : IChatModel
 
         var builder = new StringBuilder();
         builder.AppendLine(UnderstandingLanguage(text) == "ar"
-            ? "فاهمك. دي إجابة الـ local fallback، وللذكاء الحقيقي شغّل OpenAI Responses من config/API key."
-            : "I understand. This is the local fallback response; enable the OpenAI Responses provider for stronger reasoning.");
+            ? "فاهمك. دي إجابة الـ local fallback؛ للذكاء الأقوى شغّل موديل محلي عبر Ollama من config."
+            : "I understand. This is the local fallback response; enable a local Ollama model in config for stronger reasoning.");
 
         if (!string.IsNullOrWhiteSpace(text))
         {

@@ -60,14 +60,12 @@ public static class ThothRuntimeServiceCollectionExtensions
         services.AddSingleton<IChatModel>(provider =>
         {
             var options = provider.GetRequiredService<IOptions<ThothOptions>>().Value;
-            var apiKey = Environment.GetEnvironmentVariable(options.Model.ApiKeyEnvironmentVariable) ?? string.Empty;
-            if (ShouldUseResponses(options.Model.Provider, apiKey))
+            if (ShouldUseOllama(options.Model.Provider))
             {
-                return new OpenAiResponsesChatModel(
+                return new OllamaChatModel(
                     new HttpClient(),
-                    new OpenAiCompatibleChatModelOptions(
+                    new OllamaChatModelOptions(
                         options.Model.Endpoint,
-                        apiKey,
                         options.Model.Model,
                         options.Model.Temperature));
             }
@@ -89,21 +87,9 @@ public static class ThothRuntimeServiceCollectionExtensions
         return services;
     }
 
-    private static bool ShouldUseResponses(string provider, string apiKey)
+    private static bool ShouldUseOllama(string provider)
     {
-        if (provider.Equals("local", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (provider.Equals("auto", StringComparison.OrdinalIgnoreCase))
-        {
-            return !string.IsNullOrWhiteSpace(apiKey);
-        }
-
-        return provider.Equals("openai", StringComparison.OrdinalIgnoreCase) ||
-               provider.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) ||
-               provider.Equals("openai-responses", StringComparison.OrdinalIgnoreCase);
+        return provider.Equals("ollama", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ResolvePath(string path)

@@ -1,6 +1,6 @@
 # Thoth
 
-Thoth is a local-first AI agent platform built in .NET 8 and Angular. It has a real agent runtime, a ChatGPT-class web shell, conversation storage, attachment upload, memory, tools, execution policy, CLI, and HTTP API.
+Thoth is a local-first AI agent platform built in .NET 8 and Angular. It has a real agent runtime, a full chat web shell, conversation storage, attachment upload, memory, tools, execution policy, CLI, and HTTP API.
 
 ## Quick Start
 
@@ -66,19 +66,18 @@ Available endpoints:
 
 ## Model Configuration
 
-Default mode is `auto`: it uses the OpenAI Responses API when `OPENAI_API_KEY` is available, otherwise it falls back to the local deterministic model.
+Default mode is `local`: it uses Thoth's built-in deterministic fallback and does not depend on any remote model provider.
 
 ```json
 {
   "Thoth": {
     "Model": {
-      "Provider": "auto",
-      "Model": "gpt-5.5",
-      "Endpoint": "https://api.openai.com/v1/responses",
-      "ApiKeyEnvironmentVariable": "OPENAI_API_KEY"
+      "Provider": "local",
+      "Model": "thoth-local",
+      "Endpoint": "http://localhost:11434/api/chat"
     }
   }
 }
 ```
 
-To force local fallback, set `Provider` to `local`. To force the Responses API, set `Provider` to `openai-responses`.
+To use a stronger local model, run Ollama locally and set `Provider` to `ollama`, `Model` to your local model name, and `Endpoint` to `http://localhost:11434/api/chat`.
