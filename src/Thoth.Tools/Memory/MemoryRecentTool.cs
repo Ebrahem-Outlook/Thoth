@@ -21,7 +21,7 @@ public sealed class MemoryRecentTool : IAgentTool
         CancellationToken cancellationToken = default)
     {
         var records = await context.Memory.RecentAsync(
-            invocation.GetString("scope", string.Empty),
+            invocation.GetString("scope", "project"),
             Math.Clamp(invocation.GetInt("limit", 8), 1, 50),
             cancellationToken);
 

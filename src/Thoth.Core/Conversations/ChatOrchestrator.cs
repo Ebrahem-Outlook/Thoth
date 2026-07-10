@@ -49,7 +49,7 @@ public sealed class ChatOrchestrator(
 
         if (request.UseTools && understood.RequiresTools)
         {
-            var goal = BuildAgentGoal(request.Content, attachments, understood);
+            var goal = BuildAgentGoal(request.Content, attachments);
             agentRun = await agentEngine.RunAsync(
                 new AgentRequest(goal, request.WorkingDirectory, request.Model, request.MaxSteps),
                 cancellationToken);
@@ -115,16 +115,10 @@ public sealed class ChatOrchestrator(
 
     private static string BuildAgentGoal(
         string content,
-        IReadOnlyList<ConversationAttachment> attachments,
-        UnderstandingResult understood)
+        IReadOnlyList<ConversationAttachment> attachments)
     {
         var builder = new StringBuilder();
         builder.AppendLine(content);
-        builder.AppendLine();
-        builder.AppendLine("Understanding:");
-        builder.AppendLine($"Intent: {understood.Intent}");
-        builder.AppendLine($"Topic: {understood.Topic}");
-        builder.AppendLine($"Summary: {understood.Summary}");
 
         if (attachments.Count > 0)
         {

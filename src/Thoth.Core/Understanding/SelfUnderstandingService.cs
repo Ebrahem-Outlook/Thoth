@@ -3,7 +3,7 @@ using Thoth.Core.Chat;
 
 namespace Thoth.Core.Understanding;
 
-public sealed class LlmUnderstandingService(
+public sealed class SelfUnderstandingService(
     IChatModel model,
     IUserUnderstandingService fallback) : IUserUnderstandingService
 {
@@ -12,7 +12,7 @@ public sealed class LlmUnderstandingService(
         CancellationToken cancellationToken = default)
     {
         var prompt = $$"""
-        Classify the user's message for an AI assistant. Return JSON only.
+        Classify the user's message for Thoth's self-contained agent runtime. Return JSON only.
         Shape:
         {
           "intent": "general_chat | workspace_task | vision_chat | file_analysis | creative | research",
@@ -35,7 +35,7 @@ public sealed class LlmUnderstandingService(
             var response = await model.CompleteAsync(
                 new ChatRequest(
                     [
-                        new ChatMessage(ChatRole.System, "You are a strict JSON classifier."),
+                        new ChatMessage(ChatRole.System, "You are Thoth's internal deterministic classifier."),
                         new ChatMessage(ChatRole.User, prompt)
                     ],
                     "thoth-understanding",

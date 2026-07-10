@@ -6,7 +6,7 @@
 Thoth.Web / Thoth.Cli / Thoth.Api
   -> Thoth.Runtime
     -> Thoth.Core
-    -> Thoth.Llm
+    -> Thoth.Llm (internal chat contract + self-contained reasoning engine)
     -> Thoth.Tools
     -> Thoth.Memory
     -> Thoth.Sandbox
@@ -16,7 +16,7 @@ Thoth.Web / Thoth.Cli / Thoth.Api
 
 - `AgentEngine` owns the run loop.
 - `IAgentPlanner` creates a tool plan.
-- `IChatModel` abstracts model providers.
+- `IChatModel` is the internal chat/reasoning contract used by Thoth's self-contained engine.
 - `IAgentTool` exposes inspectable capabilities.
 - `IMemoryStore` persists useful context between runs.
 - `IExecutionPolicy` decides whether a tool call is allowed.
@@ -32,7 +32,7 @@ HTTP multipart/json request
   -> understand user intent
   -> store user message
   -> if workspace/tool task: run AgentEngine
-  -> otherwise: call chat model with conversation history
+  -> otherwise: call the self-contained reasoning engine with conversation history
   -> store assistant message
   -> return conversation, understanding, optional run trace
 ```

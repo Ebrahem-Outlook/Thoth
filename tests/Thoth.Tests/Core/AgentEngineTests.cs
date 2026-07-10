@@ -11,13 +11,13 @@ namespace Thoth.Tests.Core;
 public sealed class AgentEngineTests
 {
     [Fact]
-    public async Task RunAsync_UsesLocalModelAndWorkspaceTools()
+    public async Task RunAsync_UsesSelfModelAndWorkspaceTools()
     {
         var workspace = CreateWorkspace();
         await File.WriteAllTextAsync(Path.Combine(workspace, "Program.cs"), "Console.WriteLine(\"Hello Thoth\");");
 
         var memory = new InMemoryMemoryStore();
-        var model = new LocalReasoningChatModel();
+        var model = new SelfContainedReasoningModel();
         var tools = DefaultToolSet.Create(TimeSpan.FromSeconds(2));
         var policy = new LocalExecutionPolicy(new SandboxOptions());
         var planner = new JsonAgentPlanner(model, new HeuristicAgentPlanner());
@@ -26,13 +26,18 @@ public sealed class AgentEngineTests
         var run = await engine.RunAsync(new AgentRequest(
             "summarize Program.cs in this workspace",
             workspace,
-            "thoth-local",
+            "thoth-self",
             MaxSteps: 6));
 
         Assert.True(run.Succeeded);
+        Assert.Contains(run.Steps, step => step.Invocation?.ToolName == "workspace.summary");
         Assert.Contains(run.Steps, step => step.Invocation?.ToolName == "workspace.map");
         Assert.Contains(run.Steps, step => step.Invocation?.ToolName == "file.read");
-        Assert.Contains("Thoth run completed", run.FinalAnswer);
+        Assert.Contains("I inspected the workspace", run.FinalAnswer);
+
+        var memories = await memory.RecentAsync(limit: 20);
+        Assert.DoesNotContain(memories, record => record.Scope == "run");
+        Assert.Contains(memories, record => record.Scope == "project" && record.Metadata.TryGetValue("kind", out var kind) && kind == "agent_outcome");
     }
 
     private static string CreateWorkspace()

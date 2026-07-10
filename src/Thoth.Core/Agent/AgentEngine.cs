@@ -36,7 +36,10 @@ public sealed class AgentEngine(
         }
 
         await memory.EnsureCreatedAsync(cancellationToken);
-        var relevantMemories = await memory.SearchAsync(request.Goal, limit: 6, cancellationToken: cancellationToken);
+        var relevantMemories = (await memory.SearchAsync(request.Goal, "project", limit: 6, cancellationToken: cancellationToken))
+            .Where(record => !string.Equals(record.Scope, "run", StringComparison.OrdinalIgnoreCase))
+            .Take(6)
+            .ToArray();
 
         var planningContext = new AgentPlanningContext(request, relevantMemories, tools.List());
         var plan = await planner.CreatePlanAsync(planningContext, cancellationToken);
@@ -52,17 +55,6 @@ public sealed class AgentEngine(
             if (planStep.Invocation is not null)
             {
                 result = await ExecuteToolAsync(planStep.Invocation, toolContext, cancellationToken);
-
-                await memory.AddAsync(
-                    "run",
-                    $"Run {runId}: {planStep.Invocation.ToolName} => {(result.Succeeded ? "ok" : "failed")}: {Trim(result.Content, 500)}",
-                    new Dictionary<string, string>
-                    {
-                        ["runId"] = runId.ToString("N"),
-                        ["tool"] = planStep.Invocation.ToolName,
-                        ["succeeded"] = result.Succeeded.ToString()
-                    },
-                    cancellationToken);
             }
 
             executedSteps.Add(new AgentStep(
@@ -79,11 +71,12 @@ public sealed class AgentEngine(
 
         await memory.AddAsync(
             "project",
-            $"Goal: {request.Goal}\nResult: {Trim(finalAnswer, 1200)}",
+            BuildProjectMemory(request.Goal, finalAnswer),
             new Dictionary<string, string>
             {
                 ["runId"] = runId.ToString("N"),
-                ["succeeded"] = succeeded.ToString()
+                ["succeeded"] = succeeded.ToString(),
+                ["kind"] = "agent_outcome"
             },
             cancellationToken);
 
@@ -187,4 +180,61 @@ public sealed class AgentEngine(
 
         return value[..maxLength] + "\n[truncated]";
     }
+
+    private static string BuildProjectMemory(
+        string goal,
+        string finalAnswer)
+    {
+        var builder = new StringBuilder();
+        builder.AppendLine($"Task: {Trim(SingleLine(goal), 220)}");
+        builder.AppendLine($"Outcome: {Trim(BuildOutcomeSummary(finalAnswer), 520)}");
+
+        return builder.ToString().Trim();
+    }
+
+    private static string BuildOutcomeSummary(string finalAnswer)
+    {
+        var lines = finalAnswer
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var summary = new List<string>();
+        var skipNextIntentBullet = false;
+
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("Tools used:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Next best move:", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Step ", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Tool:", StringComparison.OrdinalIgnoreCase))
+            {
+                break;
+            }
+
+            if (line.StartsWith("Thoth self-run complete", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("I inspected the workspace", StringComparison.OrdinalIgnoreCase) ||
+                line.StartsWith("Arabic request detected", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (line.StartsWith("Intent understood:", StringComparison.OrdinalIgnoreCase))
+            {
+                skipNextIntentBullet = true;
+                continue;
+            }
+
+            if (skipNextIntentBullet && line.StartsWith("- ", StringComparison.Ordinal))
+            {
+                skipNextIntentBullet = false;
+                continue;
+            }
+
+            skipNextIntentBullet = false;
+            summary.Add(line);
+        }
+
+        return SingleLine(string.Join(" ", summary.Take(6)));
+    }
+
+    private static string SingleLine(string value) =>
+        value.Replace('\r', ' ').Replace('\n', ' ').Trim();
 }

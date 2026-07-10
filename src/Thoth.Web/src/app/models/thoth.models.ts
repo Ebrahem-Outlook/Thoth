@@ -1,4 +1,4 @@
-export type ChatRole = 'System' | 'User' | 'Assistant' | 'Tool';
+export type ChatRole = 'System' | 'User' | 'Assistant' | 'Tool' | 0 | 1 | 2 | 3;
 
 export interface Conversation {
   id: string;
@@ -101,6 +101,34 @@ export interface ClientConfig {
   allowShell: boolean;
   maxAgentSteps: number;
   features: string[];
+}
+
+export interface WorkspaceEndpoint {
+  method: string;
+  route: string;
+  sourceFile: string;
+}
+
+export interface WorkspaceSummary {
+  root: string;
+  generatedAt: string;
+  fileCount: number;
+  directoryCount: number;
+  dotNetProjects: string[];
+  packageFiles: string[];
+  topLevelEntries: string[];
+  endpoints: WorkspaceEndpoint[];
+}
+
+export interface SystemStatus {
+  runtimeMode: string;
+  model: string;
+  selfContainedOnly: boolean;
+  shellEnabled: boolean;
+  toolCount: number;
+  conversationCount: number;
+  memoryCount: number;
+  time: string;
 }
 
 export interface MemoryRecord {

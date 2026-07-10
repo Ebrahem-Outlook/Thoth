@@ -8,6 +8,7 @@ public sealed class LocalExecutionPolicy(SandboxOptions options) : IExecutionPol
 {
     private static readonly HashSet<string> AlwaysAllowedTools = new(StringComparer.OrdinalIgnoreCase)
     {
+        "workspace.summary",
         "workspace.map",
         "file.read",
         "file.list",

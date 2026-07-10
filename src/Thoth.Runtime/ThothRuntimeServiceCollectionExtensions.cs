@@ -59,25 +59,14 @@ public static class ThothRuntimeServiceCollectionExtensions
 
         services.AddSingleton<IChatModel>(provider =>
         {
-            var options = provider.GetRequiredService<IOptions<ThothOptions>>().Value;
-            if (ShouldUseOllama(options.Model.Provider))
-            {
-                return new OllamaChatModel(
-                    new HttpClient(),
-                    new OllamaChatModelOptions(
-                        options.Model.Endpoint,
-                        options.Model.Model,
-                        options.Model.Temperature));
-            }
-
-            return new LocalReasoningChatModel();
+            return new SelfContainedReasoningModel();
         });
 
         services.AddSingleton<IAgentPlanner>(provider =>
             new JsonAgentPlanner(provider.GetRequiredService<IChatModel>(), new HeuristicAgentPlanner()));
 
         services.AddSingleton<IUserUnderstandingService>(provider =>
-            new LlmUnderstandingService(
+            new SelfUnderstandingService(
                 provider.GetRequiredService<IChatModel>(),
                 new HeuristicUnderstandingService()));
 
@@ -85,11 +74,6 @@ public static class ThothRuntimeServiceCollectionExtensions
         services.AddSingleton<ChatOrchestrator>();
 
         return services;
-    }
-
-    private static bool ShouldUseOllama(string provider)
-    {
-        return provider.Equals("ollama", StringComparison.OrdinalIgnoreCase);
     }
 
     private static string ResolvePath(string path)

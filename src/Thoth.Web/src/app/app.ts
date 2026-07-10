@@ -37,7 +37,9 @@ import {
   ConversationDetail,
   ConversationMessage,
   MemoryRecord,
+  SystemStatus,
   ToolDefinition,
+  WorkspaceSummary,
 } from './models/thoth.models';
 import { MarkdownPipe } from './pipes/markdown.pipe';
 import { ThothApiService } from './services/thoth-api.service';
@@ -48,7 +50,8 @@ interface PendingFile {
   kind: 'image' | 'file';
 }
 
-type SidePanel = 'tools' | 'memory' | 'settings' | 'run';
+type SidePanel = 'tools' | 'memory' | 'settings' | 'run' | 'workspace';
+type NormalizedRole = 'user' | 'assistant' | 'system' | 'tool';
 
 @Component({
   selector: 'app-root',
@@ -91,12 +94,17 @@ export class App implements OnInit, OnDestroy {
   @ViewChild('messageInput') messageInput?: ElementRef<HTMLTextAreaElement>;
 
   private readonly api = inject(ThothApiService);
+  private searchTimer?: ReturnType<typeof setTimeout>;
+  private copyTimer?: ReturnType<typeof setTimeout>;
 
   readonly conversations = signal<Conversation[]>([]);
   readonly selectedConversation = signal<ConversationDetail | null>(null);
+  readonly transientMessages = signal<ConversationMessage[]>([]);
   readonly config = signal<ClientConfig | null>(null);
   readonly tools = signal<ToolDefinition[]>([]);
   readonly memories = signal<MemoryRecord[]>([]);
+  readonly workspaceSummary = signal<WorkspaceSummary | null>(null);
+  readonly systemStatus = signal<SystemStatus | null>(null);
   readonly lastRun = signal<AgentRun | null>(null);
   readonly activePanel = signal<SidePanel>('run');
   readonly sidebarOpen = signal(true);
@@ -108,20 +116,47 @@ export class App implements OnInit, OnDestroy {
   readonly memoryQuery = signal('');
   readonly composerText = signal('');
   readonly pendingFiles = signal<PendingFile[]>([]);
+  readonly copiedMessageId = signal<string | null>(null);
+  readonly draggingFiles = signal(false);
   readonly selectedModel = signal('');
   readonly useTools = signal(true);
   readonly maxSteps = signal(8);
 
   readonly pinnedConversations = computed(() => this.conversations().filter((item) => item.isPinned));
   readonly recentConversations = computed(() => this.conversations().filter((item) => !item.isPinned));
-  readonly messages = computed(() => this.selectedConversation()?.messages ?? []);
+  readonly messages = computed(() => [
+    ...(this.selectedConversation()?.messages ?? []),
+    ...this.transientMessages(),
+  ]);
   readonly activeConversationId = computed(() => this.selectedConversation()?.conversation.id ?? null);
+  readonly currentTitle = computed(() => this.selectedConversation()?.conversation?.title || 'New conversation');
+  readonly statusLine = computed(() => {
+    const status = this.systemStatus();
+    if (!status) {
+      return this.config()?.provider ? `${this.config()?.provider} runtime` : 'connecting';
+    }
+
+    return `${status.runtimeMode} - ${status.toolCount} tools - shell ${status.shellEnabled ? 'on' : 'off'}`;
+  });
 
   ngOnInit(): void {
+    if (this.isCompactViewport()) {
+      this.sidebarOpen.set(false);
+      this.rightPanelOpen.set(false);
+    }
+
     this.refreshAll();
   }
 
   ngOnDestroy(): void {
+    if (this.searchTimer) {
+      clearTimeout(this.searchTimer);
+    }
+
+    if (this.copyTimer) {
+      clearTimeout(this.copyTimer);
+    }
+
     for (const file of this.pendingFiles()) {
       if (file.previewUrl) {
         URL.revokeObjectURL(file.previewUrl);
@@ -144,6 +179,7 @@ export class App implements OnInit, OnDestroy {
 
     this.loadConversations();
     this.loadTools();
+    this.loadWorkspace();
     this.searchMemory(' ');
     this.booting.set(false);
   }
@@ -164,7 +200,11 @@ export class App implements OnInit, OnDestroy {
     this.api.getConversation(id).subscribe({
       next: (detail) => {
         this.selectedConversation.set(detail);
+        this.transientMessages.set([]);
         this.lastRun.set(null);
+        if (this.isCompactViewport()) {
+          this.sidebarOpen.set(false);
+        }
         queueMicrotask(() => this.scrollToBottom());
       },
       error: () => this.error.set('Could not open this conversation.'),
@@ -173,10 +213,17 @@ export class App implements OnInit, OnDestroy {
 
   newConversation(): void {
     this.selectedConversation.set(null);
+    this.transientMessages.set([]);
     this.lastRun.set(null);
     this.composerText.set('');
     this.clearFiles();
-    queueMicrotask(() => this.messageInput?.nativeElement.focus());
+    if (this.isCompactViewport()) {
+      this.sidebarOpen.set(false);
+    }
+    queueMicrotask(() => {
+      this.autoResizeComposer();
+      this.messageInput?.nativeElement.focus();
+    });
   }
 
   togglePinned(conversation: Conversation, event: Event): void {
@@ -220,12 +267,38 @@ export class App implements OnInit, OnDestroy {
     });
   }
 
+  loadWorkspace(): void {
+    this.api.getWorkspaceSummary().subscribe({
+      next: (summary) => this.workspaceSummary.set(summary),
+      error: () => this.error.set('Could not load workspace summary.'),
+    });
+
+    this.api.getSystemStatus().subscribe({
+      next: (status) => this.systemStatus.set(status),
+      error: () => this.error.set('Could not load system status.'),
+    });
+  }
+
   searchMemory(query = this.memoryQuery()): void {
     this.memoryQuery.set(query);
-    this.api.searchMemory(query || ' ').subscribe({
+    this.api.searchMemory(query || '', 'project').subscribe({
       next: (memories) => this.memories.set(memories),
       error: () => this.error.set('Could not search memory.'),
     });
+  }
+
+  onSearchChange(value: string): void {
+    this.query.set(value);
+    if (this.searchTimer) {
+      clearTimeout(this.searchTimer);
+    }
+
+    this.searchTimer = setTimeout(() => this.loadConversations(), 160);
+  }
+
+  onComposerChange(value: string): void {
+    this.composerText.set(value);
+    queueMicrotask(() => this.autoResizeComposer());
   }
 
   send(): void {
@@ -235,10 +308,9 @@ export class App implements OnInit, OnDestroy {
       return;
     }
 
-    const conversationBeforeSend = this.selectedConversation();
     const optimisticUser: ConversationMessage = {
       id: crypto.randomUUID(),
-      conversationId: conversationBeforeSend?.conversation.id ?? 'pending',
+      conversationId: this.activeConversationId() ?? 'pending',
       role: 'User',
       content,
       createdAt: new Date().toISOString(),
@@ -254,17 +326,16 @@ export class App implements OnInit, OnDestroy {
       })),
     };
 
-    if (conversationBeforeSend) {
-      this.selectedConversation.set({
-        ...conversationBeforeSend,
-        messages: [...conversationBeforeSend.messages, optimisticUser],
-      });
-    }
+    this.transientMessages.set([optimisticUser]);
 
     this.busy.set(true);
     this.error.set('');
     this.composerText.set('');
-    this.clearFiles(false);
+    this.clearFiles();
+    queueMicrotask(() => {
+      this.autoResizeComposer();
+      this.scrollToBottom('smooth');
+    });
 
     this.api
       .sendMessage(content, this.activeConversationId(), files, {
@@ -282,6 +353,7 @@ export class App implements OnInit, OnDestroy {
   }
 
   applyChatResponse(response: ChatResponseDto): void {
+    this.transientMessages.set([]);
     this.lastRun.set(response.agentRun ?? null);
     this.activePanel.set(response.agentRun ? 'run' : 'memory');
     this.busy.set(false);
@@ -302,8 +374,45 @@ export class App implements OnInit, OnDestroy {
       return;
     }
 
+    this.addFiles(Array.from(input.files));
+    input.value = '';
+  }
+
+  onPaste(event: ClipboardEvent): void {
+    const files = Array.from(event.clipboardData?.files ?? []);
+    if (!files.length) {
+      return;
+    }
+
+    event.preventDefault();
+    this.addFiles(files);
+  }
+
+  onDragOver(event: DragEvent): void {
+    event.preventDefault();
+    if (event.dataTransfer?.types?.includes('Files')) {
+      this.draggingFiles.set(true);
+    }
+  }
+
+  onDragLeave(event: DragEvent): void {
+    if (event.currentTarget === event.target) {
+      this.draggingFiles.set(false);
+    }
+  }
+
+  onDrop(event: DragEvent): void {
+    event.preventDefault();
+    this.draggingFiles.set(false);
+    const files = Array.from(event.dataTransfer?.files ?? []);
+    if (files.length) {
+      this.addFiles(files);
+    }
+  }
+
+  addFiles(files: File[]): void {
     const next = [...this.pendingFiles()];
-    for (const file of Array.from(input.files)) {
+    for (const file of files) {
       const isImage = file.type.startsWith('image/');
       next.push({
         file,
@@ -313,7 +422,6 @@ export class App implements OnInit, OnDestroy {
     }
 
     this.pendingFiles.set(next);
-    input.value = '';
   }
 
   removeFile(index: number): void {
@@ -339,10 +447,20 @@ export class App implements OnInit, OnDestroy {
   setPanel(panel: SidePanel): void {
     this.activePanel.set(panel);
     this.rightPanelOpen.set(true);
+    if (this.isCompactViewport()) {
+      this.sidebarOpen.set(false);
+    }
   }
 
-  copy(content: string): void {
+  copyMessage(id: string, content: string): void {
     void navigator.clipboard?.writeText(content);
+    this.copiedMessageId.set(id);
+
+    if (this.copyTimer) {
+      clearTimeout(this.copyTimer);
+    }
+
+    this.copyTimer = setTimeout(() => this.copiedMessageId.set(null), 1300);
   }
 
   startDictation(): void {
@@ -359,9 +477,81 @@ export class App implements OnInit, OnDestroy {
     recognition.onresult = (event: any) => {
       const text = event.results?.[0]?.[0]?.transcript ?? '';
       this.composerText.set(`${this.composerText()} ${text}`.trim());
-      queueMicrotask(() => this.messageInput?.nativeElement.focus());
+      queueMicrotask(() => {
+        this.autoResizeComposer();
+        this.messageInput?.nativeElement.focus();
+      });
     };
     recognition.start();
+  }
+
+  messageRole(message: ConversationMessage): NormalizedRole {
+    if (message.role === 1) {
+      return 'user';
+    }
+
+    if (message.role === 2) {
+      return 'assistant';
+    }
+
+    if (message.role === 3) {
+      return 'tool';
+    }
+
+    if (message.role === 0) {
+      return 'system';
+    }
+
+    const role = String(message.role).toLowerCase();
+    if (role.includes('user')) {
+      return 'user';
+    }
+
+    if (role.includes('tool')) {
+      return 'tool';
+    }
+
+    if (role.includes('system')) {
+      return 'system';
+    }
+
+    return 'assistant';
+  }
+
+  messageLabel(message: ConversationMessage): string {
+    const role = this.messageRole(message);
+    if (role === 'user') {
+      return 'You';
+    }
+
+    if (role === 'tool') {
+      return 'Tool';
+    }
+
+    if (role === 'system') {
+      return 'System';
+    }
+
+    return 'Thoth';
+  }
+
+  messageInitial(message: ConversationMessage): string {
+    return this.messageRole(message) === 'user' ? 'Y' : 'T';
+  }
+
+  formatIntent(intent?: string | null): string {
+    if (!intent) {
+      return '';
+    }
+
+    return intent
+      .replace(/_/g, ' ')
+      .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  memoryPreview(content: string): string {
+    const normalized = content.replace(/\s+/g, ' ').trim();
+    return normalized.length <= 420 ? normalized : `${normalized.slice(0, 420)}...`;
   }
 
   downloadAttachment(id: string): string {
@@ -378,8 +568,22 @@ export class App implements OnInit, OnDestroy {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   }
 
-  private scrollToBottom(): void {
+  private autoResizeComposer(): void {
+    const textarea = this.messageInput?.nativeElement;
+    if (!textarea) {
+      return;
+    }
+
+    textarea.style.height = 'auto';
+    textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
+  }
+
+  private scrollToBottom(behavior: ScrollBehavior = 'smooth'): void {
     const surface = document.querySelector('.messages');
-    surface?.scrollTo({ top: surface.scrollHeight, behavior: 'smooth' });
+    surface?.scrollTo({ top: surface.scrollHeight, behavior });
+  }
+
+  private isCompactViewport(): boolean {
+    return typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches;
   }
 }

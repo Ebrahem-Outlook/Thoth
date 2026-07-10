@@ -6,8 +6,8 @@
 - Agent run loop
 - Tool registry
 - SQLite memory
-- Local deterministic model
-- Ollama local model adapter
+- Self-contained reasoning engine
+- Arabic/English intent routing
 - CLI and minimal API
 - Safety policy
 - Initial tests
@@ -29,7 +29,7 @@ Status: implemented.
 
 ## Phase 3: Smarter Agent Loop
 
-- True token streaming from model providers
+- Streaming from internal runtime events
 - Tool result summarization
 - Multi-step self-evaluation
 - Retry policies
@@ -46,7 +46,7 @@ Status: implemented.
 
 ## Phase 5: Memory Upgrade
 
-- Embedding provider abstraction
+- Workspace and memory indexing abstraction
 - Vector search
 - Memory compaction
 - User preference memory

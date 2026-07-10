@@ -8,7 +8,9 @@ import {
   Conversation,
   ConversationDetail,
   MemoryRecord,
+  SystemStatus,
   ToolDefinition,
+  WorkspaceSummary,
 } from '../models/thoth.models';
 
 @Injectable({ providedIn: 'root' })
@@ -87,8 +89,16 @@ export class ThothApiService {
     return this.http.get<ToolDefinition[]>(`${this.baseUrl}/api/tools`);
   }
 
-  searchMemory(query: string, scope = '', limit = 12): Observable<MemoryRecord[]> {
-    let params = new HttpParams().set('query', query || ' ').set('limit', limit);
+  getSystemStatus(): Observable<SystemStatus> {
+    return this.http.get<SystemStatus>(`${this.baseUrl}/api/system/status`);
+  }
+
+  getWorkspaceSummary(): Observable<WorkspaceSummary> {
+    return this.http.get<WorkspaceSummary>(`${this.baseUrl}/api/workspace/summary`);
+  }
+
+  searchMemory(query: string, scope = 'project', limit = 12): Observable<MemoryRecord[]> {
+    let params = new HttpParams().set('query', query || '').set('limit', limit);
     if (scope.trim()) {
       params = params.set('scope', scope.trim());
     }

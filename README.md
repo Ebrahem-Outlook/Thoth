@@ -1,6 +1,6 @@
 # Thoth
 
-Thoth is a local-first AI agent platform built in .NET 8 and Angular. It has a real agent runtime, a full chat web shell, conversation storage, attachment upload, memory, tools, execution policy, CLI, and HTTP API.
+Thoth is a self-contained AI agent platform built in .NET 8 and Angular. It has a real agent runtime, a full chat web shell, conversation storage, attachment upload, memory, tools, execution policy, CLI, and HTTP API.
 
 ## Quick Start
 
@@ -47,8 +47,13 @@ dotnet run --project src/Thoth.Api
 
 Available endpoints:
 
+- `GET /` redirects to Swagger UI
+- `GET /swagger`
+- `GET /swagger/v1/swagger.json`
 - `GET /health`
 - `GET /api/client-config`
+- `GET /api/system/status`
+- `GET /api/workspace/summary`
 - `GET /api/tools`
 - `GET /api/conversations`
 - `POST /api/conversations`
@@ -66,18 +71,16 @@ Available endpoints:
 
 ## Model Configuration
 
-Default mode is `local`: it uses Thoth's built-in deterministic fallback and does not depend on any remote model provider.
+Default mode is `self`: it uses Thoth's built-in reasoning engine and does not call any outside model service.
 
 ```json
 {
   "Thoth": {
     "Model": {
-      "Provider": "local",
-      "Model": "thoth-local",
-      "Endpoint": "http://localhost:11434/api/chat"
+      "Provider": "self",
+      "Model": "thoth-self",
+      "Temperature": 0.2
     }
   }
 }
 ```
-
-To use a stronger local model, run Ollama locally and set `Provider` to `ollama`, `Model` to your local model name, and `Endpoint` to `http://localhost:11434/api/chat`.

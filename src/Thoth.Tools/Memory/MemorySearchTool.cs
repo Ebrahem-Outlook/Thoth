@@ -22,11 +22,11 @@ public sealed class MemorySearchTool : IAgentTool
         CancellationToken cancellationToken = default)
     {
         var query = invocation.GetString("query");
-        var scope = invocation.GetString("scope", string.Empty);
+        var scope = invocation.GetString("scope", "project");
         var limit = Math.Clamp(invocation.GetInt("limit", 8), 1, 50);
         var records = await context.Memory.SearchAsync(
             query,
-            string.IsNullOrWhiteSpace(scope) ? null : scope,
+            string.IsNullOrWhiteSpace(scope) ? "project" : scope,
             limit,
             cancellationToken);
 

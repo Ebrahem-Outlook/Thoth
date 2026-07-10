@@ -32,6 +32,13 @@ public sealed class HeuristicAgentPlanner : IAgentPlanner
         AddIfAvailable(
             context,
             steps,
+            "workspace.summary",
+            "Summarize the workspace before deeper inspection.",
+            new Dictionary<string, string?> { ["maxEntries"] = "50" });
+
+        AddIfAvailable(
+            context,
+            steps,
             "workspace.map",
             "Map the workspace so the agent understands the project shape.",
             new Dictionary<string, string?> { ["maxDepth"] = "4" });
@@ -84,7 +91,7 @@ public sealed class HeuristicAgentPlanner : IAgentPlanner
 
     private static string ExtractLikelyPath(string goal)
     {
-        var match = Regex.Match(goal, @"(?<path>[\w./\\-]+\.(cs|json|md|txt|sln|csproj|yml|yaml|xml))", RegexOptions.IgnoreCase);
+        var match = Regex.Match(goal, @"(?<path>[\w./\\-]+\.(cs|ts|html|scss|json|md|txt|sln|csproj|yml|yaml|xml))", RegexOptions.IgnoreCase);
         return match.Success ? match.Groups["path"].Value : string.Empty;
     }
 

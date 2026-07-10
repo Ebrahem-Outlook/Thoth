@@ -15,11 +15,9 @@ public sealed class ThothOptions
 
 public sealed class ModelOptions
 {
-    public string Provider { get; set; } = "local";
+    public string Provider { get; set; } = "self";
 
-    public string Model { get; set; } = "thoth-local";
-
-    public string Endpoint { get; set; } = "http://localhost:11434/api/chat";
+    public string Model { get; set; } = "thoth-self";
 
     public double Temperature { get; set; } = 0.2;
 }

@@ -11,6 +11,7 @@ public static class DefaultToolSet
     public static ToolRegistry Create(TimeSpan shellTimeout)
     {
         return new ToolRegistry()
+            .Register(new WorkspaceSummaryTool())
             .Register(new WorkspaceMapTool())
             .Register(new FileListTool())
             .Register(new FileInfoTool())

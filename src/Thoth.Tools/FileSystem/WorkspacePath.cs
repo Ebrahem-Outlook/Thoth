@@ -24,8 +24,10 @@ internal static class WorkspacePath
     {
         return directoryName.Equals(".git", StringComparison.OrdinalIgnoreCase) ||
                directoryName.Equals(".vs", StringComparison.OrdinalIgnoreCase) ||
+               directoryName.Equals(".angular", StringComparison.OrdinalIgnoreCase) ||
                directoryName.Equals("bin", StringComparison.OrdinalIgnoreCase) ||
                directoryName.Equals("obj", StringComparison.OrdinalIgnoreCase) ||
+               directoryName.Equals("dist", StringComparison.OrdinalIgnoreCase) ||
                directoryName.Equals("node_modules", StringComparison.OrdinalIgnoreCase);
     }
 

@@ -2,6 +2,57 @@ namespace Thoth.Core.Understanding;
 
 public sealed class HeuristicUnderstandingService : IUserUnderstandingService
 {
+    private static readonly string[] WorkspaceTerms =
+    [
+        "code",
+        "file",
+        "project",
+        "repo",
+        "workspace",
+        "build",
+        "test",
+        "bug",
+        "implement",
+        "refactor",
+        "api",
+        "backend",
+        "frontend",
+        "angular",
+        "dotnet",
+        "read",
+        "write",
+        "search",
+        "run",
+        "\u0646\u0641\u0630",
+        "\u0627\u0628\u0646\u064a",
+        "\u0627\u0643\u062a\u0628",
+        "\u0639\u062f\u0644",
+        "\u062d\u0633\u0646",
+        "\u0645\u0634\u0631\u0648\u0639",
+        "\u0645\u0644\u0641",
+        "\u0643\u0648\u062f",
+        "\u0628\u0627\u0643",
+        "\u0641\u0631\u0648\u0646\u062a",
+        "\u0648\u0627\u062c\u0647\u0629",
+        "\u0627\u0646\u062c\u0644\u0648\u0631"
+    ];
+
+    private static readonly string[] FrontendTerms =
+    [
+        "angular",
+        "frontend",
+        "\u0641\u0631\u0648\u0646\u062a",
+        "\u0648\u0627\u062c\u0647\u0629",
+        "\u0627\u0646\u062c\u0644\u0648\u0631"
+    ];
+
+    private static readonly string[] BackendTerms =
+    [
+        "api",
+        "backend",
+        "\u0628\u0627\u0643"
+    ];
+
     public Task<UnderstandingResult> UnderstandAsync(
         UnderstandingRequest request,
         CancellationToken cancellationToken = default)
@@ -25,41 +76,8 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
             text.Length > 600 ? text[..600] + "..." : text));
     }
 
-    private static bool LooksLikeWorkspaceTask(string text)
-    {
-        string[] terms =
-        [
-            "code",
-            "file",
-            "project",
-            "repo",
-            "workspace",
-            "build",
-            "test",
-            "bug",
-            "implement",
-            "refactor",
-            "api",
-            "backend",
-            "frontend",
-            "angular",
-            "dotnet",
-            "read",
-            "write",
-            "search",
-            "run",
-            "نفذ",
-            "ابني",
-            "اكتب",
-            "عدل",
-            "مشروع",
-            "ملف",
-            "باك",
-            "فرونت"
-        ];
-
-        return terms.Any(term => text.Contains(term, StringComparison.OrdinalIgnoreCase));
-    }
+    private static bool LooksLikeWorkspaceTask(string text) =>
+        ContainsAny(text, WorkspaceTerms);
 
     private static bool LooksLikeFileTask(string text) =>
         text.Contains(".cs", StringComparison.OrdinalIgnoreCase) ||
@@ -81,21 +99,24 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
             return "image";
         }
 
-        if (text.Contains("angular", StringComparison.OrdinalIgnoreCase) || text.Contains("frontend", StringComparison.OrdinalIgnoreCase))
+        if (ContainsAny(text, FrontendTerms))
         {
             return "frontend";
         }
 
-        if (text.Contains("api", StringComparison.OrdinalIgnoreCase) || text.Contains("backend", StringComparison.OrdinalIgnoreCase))
+        if (ContainsAny(text, BackendTerms))
         {
             return "backend";
         }
 
-        if (text.Contains("code", StringComparison.OrdinalIgnoreCase) || text.Contains("bug", StringComparison.OrdinalIgnoreCase))
+        if (ContainsAny(text, "code", "bug", "\u0643\u0648\u062f"))
         {
             return "coding";
         }
 
         return "general";
     }
+
+    private static bool ContainsAny(string value, params string[] terms) =>
+        terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
 }

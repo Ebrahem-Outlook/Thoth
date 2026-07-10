@@ -4,9 +4,8 @@
     "DataDirectory": "data",
     "MaxAgentSteps": 8,
     "Model": {
-      "Provider": "local",
-      "Model": "thoth-local",
-      "Endpoint": "http://localhost:11434/api/chat",
+      "Provider": "self",
+      "Model": "thoth-self",
       "Temperature": 0.2
     },
     "Sandbox": {

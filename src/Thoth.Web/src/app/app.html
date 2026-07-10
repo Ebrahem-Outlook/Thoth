@@ -1,4 +1,19 @@
-<main class="shell" [class.sidebar-collapsed]="!sidebarOpen()" [class.panel-collapsed]="!rightPanelOpen()">
+<main
+  class="shell"
+  [class.sidebar-collapsed]="!sidebarOpen()"
+  [class.panel-collapsed]="!rightPanelOpen()"
+  [class.drop-active]="draggingFiles()"
+  (dragover)="onDragOver($event)"
+  (dragleave)="onDragLeave($event)"
+  (drop)="onDrop($event)"
+>
+  @if (draggingFiles()) {
+    <div class="drop-overlay">
+      <svg lucidePaperclip size="22"></svg>
+      <strong>Drop files to attach</strong>
+    </div>
+  }
+
   <aside class="sidebar">
     <div class="brand-row">
       <button class="icon-button mobile-only" type="button" (click)="sidebarOpen.set(!sidebarOpen())" aria-label="Toggle sidebar">
@@ -7,7 +22,7 @@
       <div class="brand-mark">T</div>
       <div class="brand-copy">
         <strong>Thoth</strong>
-        <span>{{ config()?.provider || 'offline' }} / {{ selectedModel() || 'local' }}</span>
+        <span>{{ config()?.provider || 'self' }} / {{ selectedModel() || 'thoth-self' }}</span>
       </div>
     </div>
 
@@ -21,7 +36,7 @@
       <input
         type="search"
         [ngModel]="query()"
-        (ngModelChange)="query.set($event); loadConversations()"
+        (ngModelChange)="onSearchChange($event)"
         placeholder="Search chats"
       />
     </label>
@@ -79,6 +94,10 @@
         <svg lucideWrench size="16"></svg>
         <span>Tools</span>
       </button>
+      <button class="side-tab" type="button" (click)="setPanel('workspace')">
+        <svg lucideSparkles size="16"></svg>
+        <span>Workspace</span>
+      </button>
       <button class="side-tab" type="button" (click)="setPanel('memory')">
         <svg lucideBrain size="16"></svg>
         <span>Memory</span>
@@ -92,7 +111,7 @@
 
   <section class="workspace">
     <header class="topbar">
-      <button class="icon-button" type="button" (click)="sidebarOpen.set(!sidebarOpen())" aria-label="Toggle sidebar">
+      <button class="icon-button" type="button" (click)="sidebarOpen.set(!sidebarOpen())" aria-label="Toggle sidebar" title="Toggle sidebar">
         @if (sidebarOpen()) {
           <svg lucideChevronLeft size="18"></svg>
         } @else {
@@ -100,24 +119,19 @@
         }
       </button>
       <div class="conversation-heading">
-        <strong>{{ selectedConversation()?.conversation?.title || 'Ask Thoth' }}</strong>
-        <span>
-          {{ useTools() ? 'tools on' : 'chat only' }}
-          @if (lastRun()) {
-            · {{ lastRun()?.succeeded ? 'run ok' : 'run failed' }}
-          }
-        </span>
+        <strong>{{ currentTitle() }}</strong>
+        <span>{{ statusLine() }}</span>
       </div>
       <div class="top-actions">
         @if (selectedConversation()?.conversation; as activeConversation) {
-          <button class="icon-button" type="button" (click)="deleteConversation(activeConversation)" aria-label="Delete conversation">
+          <button class="icon-button" type="button" (click)="deleteConversation(activeConversation)" aria-label="Delete conversation" title="Delete conversation">
             <svg lucideTrash2 size="18"></svg>
           </button>
         }
-        <button class="icon-button" type="button" (click)="refreshAll()" aria-label="Refresh">
+        <button class="icon-button" type="button" (click)="refreshAll()" aria-label="Refresh" title="Refresh">
           <svg lucideRefreshCw size="18"></svg>
         </button>
-        <button class="icon-button" type="button" (click)="rightPanelOpen.set(!rightPanelOpen())" aria-label="Toggle panel">
+        <button class="icon-button" type="button" (click)="rightPanelOpen.set(!rightPanelOpen())" aria-label="Toggle panel" title="Toggle inspector">
           <svg lucidePanelRight size="18"></svg>
         </button>
       </div>
@@ -136,23 +150,23 @@
     <section class="messages">
       @if (!messages().length) {
         <div class="welcome">
-          <div class="orb"><svg lucideBot size="34"></svg></div>
-          <h1>Thoth</h1>
-          <p>ابدأ بكلام طبيعي، ارفع صورة أو ملف، أو اطلب تعديل في المشروع.</p>
+          <div class="orb"><svg lucideBot size="28"></svg></div>
+          <h1>What are we building?</h1>
+          <p>Ask naturally, attach files, or give Thoth a project task. Tools stay local and self-contained.</p>
           <div class="prompt-grid">
-            <button type="button" (click)="composerText.set('افهم المشروع الحالي واقترح أقوى خطوة تطوير بعدها')">
+            <button type="button" (click)="composerText.set('Analyze this project and suggest the strongest next improvement')">
               <span>Project read</span>
               <small>Context and next move</small>
             </button>
-            <button type="button" (click)="composerText.set('ابني لي API endpoint جديد ووضح الخطة قبل التنفيذ')">
+            <button type="button" (click)="composerText.set('List the backend APIs and explain what each endpoint does')">
               <span>Backend task</span>
               <small>Plan with tools</small>
             </button>
-            <button type="button" (click)="composerText.set('حلل الصورة اللي هرفعها واطلع منها المطلوب')">
-              <span>Image input</span>
-              <small>Vision-ready</small>
+            <button type="button" (click)="composerText.set('Review the Angular UI and suggest improvements')">
+              <span>Frontend review</span>
+              <small>UI and workflow</small>
             </button>
-            <button type="button" (click)="composerText.set('راجع آخر رد واحفظ التفضيلات المهمة في الذاكرة')">
+            <button type="button" (click)="composerText.set('Search memory and summarize what Thoth knows about this workspace')">
               <span>Memory</span>
               <small>Personal context</small>
             </button>
@@ -161,20 +175,26 @@
       }
 
       @for (message of messages(); track message.id) {
-        <article class="message" [class.user]="message.role === 'User'" [class.assistant]="message.role === 'Assistant'">
+        <article
+          class="message"
+          [class.user]="messageRole(message) === 'user'"
+          [class.assistant]="messageRole(message) === 'assistant'"
+          [class.tool]="messageRole(message) === 'tool'"
+          [class.system]="messageRole(message) === 'system'"
+        >
           <div class="avatar">
-            @if (message.role === 'User') {
-              <span>U</span>
-            } @else {
+            @if (messageRole(message) === 'assistant') {
               <svg lucideBot size="17"></svg>
+            } @else {
+              <span>{{ messageInitial(message) }}</span>
             }
           </div>
           <div class="message-body">
             <div class="message-meta">
-              <strong>{{ message.role === 'User' ? 'You' : 'Thoth' }}</strong>
+              <strong>{{ messageLabel(message) }}</strong>
               <span>{{ message.createdAt | date: 'shortTime' }}</span>
               @if (message.intent) {
-                <em>{{ message.intent }}</em>
+                <em>{{ formatIntent(message.intent) }}</em>
               }
             </div>
 
@@ -197,12 +217,16 @@
 
             <div class="markdown" [innerHTML]="message.content | markdown"></div>
 
-            @if (message.role === 'Assistant') {
+            @if (messageRole(message) === 'assistant') {
               <div class="message-actions">
-                <button type="button" (click)="copy(message.content)" aria-label="Copy">
-                  <svg lucideCopy size="15"></svg>
+                <button type="button" (click)="copyMessage(message.id, message.content)" aria-label="Copy" title="Copy response">
+                  @if (copiedMessageId() === message.id) {
+                    <span>Copied</span>
+                  } @else {
+                    <svg lucideCopy size="15"></svg>
+                  }
                 </button>
-                <button type="button" (click)="setPanel('run')" aria-label="Run details">
+                <button type="button" (click)="setPanel('run')" aria-label="Run details" title="Run details">
                   <svg lucideMoreVertical size="15"></svg>
                 </button>
               </div>
@@ -215,6 +239,10 @@
         <article class="message assistant pending">
           <div class="avatar"><svg lucideBot size="17"></svg></div>
           <div class="message-body">
+            <div class="message-meta">
+              <strong>Thoth</strong>
+              <span>working</span>
+            </div>
             <div class="thinking">
               <span></span><span></span><span></span>
             </div>
@@ -243,26 +271,6 @@
         </div>
       }
 
-      <div class="composer">
-        <input #fileInput type="file" multiple hidden (change)="onFilesSelected($event)" />
-        <button class="icon-button" type="button" (click)="fileInput.click()" aria-label="Attach files">
-          <svg lucidePaperclip size="19"></svg>
-        </button>
-        <textarea
-          #messageInput
-          [ngModel]="composerText()"
-          (ngModelChange)="composerText.set($event)"
-          (keydown)="onKeydown($event)"
-          rows="1"
-          placeholder="Message Thoth"
-        ></textarea>
-        <button class="icon-button" type="button" (click)="startDictation()" aria-label="Voice input">
-          <svg lucideMic size="18"></svg>
-        </button>
-        <button class="send-button" type="button" [disabled]="busy() || (!composerText().trim() && !pendingFiles().length)" (click)="send()" aria-label="Send">
-          <svg lucideSend size="18"></svg>
-        </button>
-      </div>
       <div class="composer-options">
         <label>
           <input type="checkbox" [ngModel]="useTools()" (ngModelChange)="useTools.set($event)" />
@@ -277,21 +285,54 @@
           <input type="number" min="1" max="24" [ngModel]="maxSteps()" (ngModelChange)="maxSteps.set(+$event)" />
         </label>
       </div>
+      <div class="composer">
+        <input #fileInput type="file" multiple hidden (change)="onFilesSelected($event)" />
+        <button class="icon-button" type="button" (click)="fileInput.click()" aria-label="Attach files" title="Attach files">
+          <svg lucidePaperclip size="19"></svg>
+        </button>
+        <textarea
+          #messageInput
+          data-testid="composer-input"
+          [ngModel]="composerText()"
+          (ngModelChange)="onComposerChange($event)"
+          (keydown)="onKeydown($event)"
+          (paste)="onPaste($event)"
+          rows="1"
+          placeholder="Message Thoth"
+        ></textarea>
+        <button class="icon-button" type="button" (click)="startDictation()" aria-label="Voice input" title="Voice input">
+          <svg lucideMic size="18"></svg>
+        </button>
+        <button
+          class="send-button"
+          data-testid="send-button"
+          type="button"
+          [disabled]="busy() || (!composerText().trim() && !pendingFiles().length)"
+          (click)="send()"
+          aria-label="Send"
+          title="Send"
+        >
+          <svg lucideSend size="18"></svg>
+        </button>
+      </div>
     </footer>
   </section>
 
   <aside class="inspector">
     <div class="inspector-tabs">
-      <button type="button" [class.active]="activePanel() === 'run'" (click)="setPanel('run')">
+      <button type="button" [class.active]="activePanel() === 'run'" (click)="setPanel('run')" aria-label="Run" title="Run">
         <svg lucideSparkles size="16"></svg>
       </button>
-      <button type="button" [class.active]="activePanel() === 'tools'" (click)="setPanel('tools')">
+      <button type="button" [class.active]="activePanel() === 'tools'" (click)="setPanel('tools')" aria-label="Tools" title="Tools">
         <svg lucideWrench size="16"></svg>
       </button>
-      <button type="button" [class.active]="activePanel() === 'memory'" (click)="setPanel('memory')">
+      <button type="button" [class.active]="activePanel() === 'workspace'" (click)="setPanel('workspace')" aria-label="Workspace" title="Workspace">
+        <svg lucideSparkles size="16"></svg>
+      </button>
+      <button type="button" [class.active]="activePanel() === 'memory'" (click)="setPanel('memory')" aria-label="Memory" title="Memory">
         <svg lucideBrain size="16"></svg>
       </button>
-      <button type="button" [class.active]="activePanel() === 'settings'" (click)="setPanel('settings')">
+      <button type="button" [class.active]="activePanel() === 'settings'" (click)="setPanel('settings')" aria-label="Settings" title="Settings">
         <svg lucideSettings size="16"></svg>
       </button>
     </div>
@@ -341,6 +382,55 @@
       </section>
     }
 
+    @if (activePanel() === 'workspace') {
+      <section class="panel-section">
+        <h2>Workspace</h2>
+        @if (systemStatus(); as status) {
+          <div class="run-status ok">
+            <strong>{{ status.runtimeMode }}</strong>
+            <span>{{ status.model }} - {{ status.selfContainedOnly ? 'self-contained only' : 'mixed runtime' }}</span>
+          </div>
+          <div class="metric-grid">
+            <div><strong>{{ status.toolCount }}</strong><span>tools</span></div>
+            <div><strong>{{ status.conversationCount }}</strong><span>chats</span></div>
+            <div><strong>{{ status.memoryCount }}</strong><span>memories</span></div>
+            <div><strong>{{ status.shellEnabled ? 'on' : 'off' }}</strong><span>shell</span></div>
+          </div>
+        }
+
+        @if (workspaceSummary(); as workspace) {
+          <div class="workspace-card">
+            <strong>{{ workspace.root }}</strong>
+            <p>{{ workspace.fileCount }} files - {{ workspace.directoryCount }} folders</p>
+          </div>
+
+          <h3>Projects</h3>
+          <div class="mini-list">
+            @for (project of workspace.dotNetProjects; track project) {
+              <code>{{ project }}</code>
+            }
+            @for (packageFile of workspace.packageFiles; track packageFile) {
+              <code>{{ packageFile }}</code>
+            }
+          </div>
+
+          <h3>Endpoints</h3>
+          <div class="endpoint-list">
+            @for (endpoint of workspace.endpoints; track endpoint.method + endpoint.route) {
+              <div>
+                <strong>{{ endpoint.method }}</strong>
+                <span>{{ endpoint.route }}</span>
+              </div>
+            } @empty {
+              <div class="panel-empty">No endpoints discovered.</div>
+            }
+          </div>
+        } @else {
+          <div class="panel-empty">Workspace summary is loading.</div>
+        }
+      </section>
+    }
+
     @if (activePanel() === 'memory') {
       <section class="panel-section">
         <h2>Memory</h2>
@@ -352,7 +442,7 @@
           @for (memory of memories(); track memory.id) {
             <div class="memory-card">
               <strong>{{ memory.scope }}</strong>
-              <p>{{ memory.content }}</p>
+              <p>{{ memoryPreview(memory.content) }}</p>
               <span>{{ memory.createdAt | date: 'short' }}</span>
             </div>
           } @empty {
@@ -367,8 +457,8 @@
         <h2>Settings</h2>
         <div class="settings-grid">
           <label>
-            <span>Provider</span>
-            <input [value]="config()?.provider || 'auto'" readonly />
+            <span>Runtime</span>
+            <input [value]="config()?.provider || 'self'" readonly />
           </label>
           <label>
             <span>Model</span>
