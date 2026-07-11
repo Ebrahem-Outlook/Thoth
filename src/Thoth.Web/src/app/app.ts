@@ -205,7 +205,7 @@ export class App implements OnInit, OnDestroy {
         if (this.isCompactViewport()) {
           this.sidebarOpen.set(false);
         }
-        queueMicrotask(() => this.scrollToBottom());
+        this.scheduleScrollToBottom();
       },
       error: () => this.error.set('Could not open this conversation.'),
     });
@@ -334,8 +334,8 @@ export class App implements OnInit, OnDestroy {
     this.clearFiles();
     queueMicrotask(() => {
       this.autoResizeComposer();
-      this.scrollToBottom('smooth');
     });
+    this.scheduleScrollToBottom('smooth');
 
     this.api
       .sendMessage(content, this.activeConversationId(), files, {
@@ -581,6 +581,13 @@ export class App implements OnInit, OnDestroy {
   private scrollToBottom(behavior: ScrollBehavior = 'smooth'): void {
     const surface = document.querySelector('.messages');
     surface?.scrollTo({ top: surface.scrollHeight, behavior });
+  }
+
+  private scheduleScrollToBottom(behavior: ScrollBehavior = 'smooth'): void {
+    requestAnimationFrame(() => {
+      this.scrollToBottom(behavior);
+      requestAnimationFrame(() => this.scrollToBottom(behavior));
+    });
   }
 
   private isCompactViewport(): boolean {
