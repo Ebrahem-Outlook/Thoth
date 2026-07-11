@@ -19,6 +19,13 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "frontend",
         "angular",
         "dotnet",
+        "c#",
+        "csharp",
+        ".net",
+        "method",
+        "function",
+        "class",
+        "service",
         "read",
         "write",
         "search",
@@ -40,6 +47,10 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "\u0645\u0634\u0631\u0648\u0639",
         "\u0645\u0644\u0641",
         "\u0643\u0648\u062f",
+        "\u0645\u064a\u062b\u0648\u062f",
+        "\u062f\u0627\u0644\u0629",
+        "\u0643\u0644\u0627\u0633",
+        "\u0645\u064a\u062b\u062f",
         "\u0628\u0627\u0643",
         "\u0641\u0631\u0648\u0646\u062a",
         "\u0648\u0627\u062c\u0647\u0629",
@@ -65,6 +76,18 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
     [
         "api",
         "backend",
+        "c#",
+        "csharp",
+        ".net",
+        "dotnet",
+        "method",
+        "function",
+        "class",
+        "service",
+        "\u0645\u064a\u062b\u0648\u062f",
+        "\u062f\u0627\u0644\u0629",
+        "\u0643\u0644\u0627\u0633",
+        "\u0645\u064a\u062b\u062f",
         "\u0628\u0627\u0643"
     ];
 
@@ -160,7 +183,7 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
             return "backend";
         }
 
-        if (ContainsAny(text, "code", "bug", "\u0643\u0648\u062f"))
+        if (ContainsAny(text, "code", "bug", "method", "function", "class", "\u0643\u0648\u062f", "\u0645\u064a\u062b\u0648\u062f", "\u062f\u0627\u0644\u0629", "\u0643\u0644\u0627\u0633", "\u0645\u064a\u062b\u062f"))
         {
             return "coding";
         }

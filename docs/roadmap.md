@@ -29,6 +29,10 @@ Status: implemented.
 
 ## Phase 3: Smarter Agent Loop
 
+- Event stream for thinking, tool calls, observations, and final answer
+- Single durable run state model
+- Conversation/run replay
+- Human approval gates for risky tools
 - Streaming from internal runtime events
 - Tool result summarization
 - Multi-step self-evaluation

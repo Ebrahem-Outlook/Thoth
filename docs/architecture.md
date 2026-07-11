@@ -71,3 +71,14 @@ AgentRequest
 - Destructive command tokens are blocked by policy.
 - Binary files are skipped by read and search tools.
 - All tool execution produces structured `ToolResult` records.
+
+## Agent Architecture Reference Targets
+
+Thoth should keep moving toward the proven shape used by large open-source agents:
+
+- One source of truth for conversation and run state.
+- Agent core exposed through APIs, with the UI acting as a client instead of embedding agent behavior.
+- Event-style run traces that can stream planning, tool calls, observations, and final synthesis.
+- Durable run records so long tasks can resume, be inspected, and be replayed.
+- Composable tools, prompts, memory, and contexts, with safety policy around risky actions.
+- Separate deterministic workflow control from autonomous reasoning, so coding tasks can be predictable while still using tools.

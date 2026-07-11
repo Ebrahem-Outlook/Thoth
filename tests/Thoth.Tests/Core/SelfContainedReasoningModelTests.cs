@@ -129,6 +129,30 @@ public sealed class SelfContainedReasoningModelTests
     }
 
     [Theory]
+    [InlineData("can you build a C# method")]
+    [InlineData("\u0641\u064a\u0646 \u0627\u0644 method \u062a\u0639\u0631\u0641 \u062a\u0639\u0645\u0644\u064a")]
+    public async Task CompleteAsync_UnderstandingDetectsCodingMethodTask(string message)
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.User, $"""
+                Classify the user's message.
+                User message:
+                {message}
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        using var json = JsonDocument.Parse(response.Content);
+        Assert.Equal("workspace_task", json.RootElement.GetProperty("intent").GetString());
+        Assert.Equal("backend", json.RootElement.GetProperty("topic").GetString());
+        Assert.True(json.RootElement.GetProperty("requiresTools").GetBoolean());
+    }
+
+    [Theory]
     [InlineData("Hello")]
     [InlineData("\u0627\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a")]
     public async Task CompleteAsync_UnderstandingKeepsCasualChatOutOfTools(string message)

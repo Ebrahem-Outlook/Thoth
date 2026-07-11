@@ -10,7 +10,9 @@ internal static class LocalSemanticBrain
     private static readonly TrainedPattern[] TopicPatterns = Train(
     [
         new("backend", "backend api endpoint route http asp.net controller server program.cs swagger request response middleware chat orchestrator"),
+        new("backend", "c# csharp .net dotnet method function class service controller repository async task linq"),
         new("backend", "\u0628\u0627\u0643 api endpoint http request server swagger"),
+        new("backend", "\u0643\u0648\u062f \u0645\u064a\u062b\u0648\u062f \u0645\u064a\u062b\u062f \u062f\u0627\u0644\u0629 \u0643\u0644\u0627\u0633 \u0633\u064a \u0634\u0627\u0631\u0628"),
         new("frontend", "frontend angular ui component html scss css browser user experience chat composer sidebar panel"),
         new("frontend", "\u0641\u0631\u0648\u0646\u062a \u0648\u0627\u062c\u0647\u0629 \u0627\u0646\u062c\u0644\u0648\u0631 ui"),
         new("model", "model llm reasoning brain neural think intelligence train understand planner embeddings semantic agent cognition"),
@@ -503,7 +505,9 @@ internal static class LocalSemanticBrain
         }
 
         if (ContainsAny(lower, "backend", "endpoint", "api", "swagger", "controller", "route") ||
-            ContainsAny(lower, "\u0628\u0627\u0643"))
+            ContainsAny(lower, "c#", "csharp", ".net", "dotnet", "method", "function", "class", "service") ||
+            ContainsAny(lower, "\u0628\u0627\u0643") ||
+            ContainsAny(lower, "\u0645\u064a\u062b\u0648\u062f", "\u0645\u064a\u062b\u062f", "\u062f\u0627\u0644\u0629", "\u0643\u0644\u0627\u0633", "\u0633\u064a \u0634\u0627\u0631\u0628"))
         {
             return "backend";
         }
@@ -543,8 +547,8 @@ internal static class LocalSemanticBrain
         terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
 
     private static bool HasExplicitToolSignal(string lower, string text) =>
-        ContainsAny(lower, "workspace", "project", "repo", "file", ".cs", ".ts", ".html", ".scss", "code", "backend", "frontend", "api", "endpoint", "bug", "fix", "build", "implement", "refactor", "model", "llm", "train", "neural", "reasoning") ||
-        ContainsAny(text, "\u0645\u0634\u0631\u0648\u0639", "\u0645\u0644\u0641", "\u0643\u0648\u062f", "\u0628\u0627\u0643", "\u0641\u0631\u0648\u0646\u062a", "\u0648\u0627\u062c\u0647\u0629", "\u0645\u0648\u062f\u064a\u0644", "\u062a\u062f\u0631\u064a\u0628", "\u0639\u0635\u0628\u064a");
+        ContainsAny(lower, "workspace", "project", "repo", "file", ".cs", ".ts", ".html", ".scss", "code", "backend", "frontend", "api", "endpoint", "bug", "fix", "build", "implement", "refactor", "model", "llm", "train", "neural", "reasoning", "c#", "csharp", ".net", "dotnet", "method", "function", "class", "service") ||
+        ContainsAny(text, "\u0645\u0634\u0631\u0648\u0639", "\u0645\u0644\u0641", "\u0643\u0648\u062f", "\u0645\u064a\u062b\u0648\u062f", "\u0645\u064a\u062b\u062f", "\u062f\u0627\u0644\u0629", "\u0643\u0644\u0627\u0633", "\u0628\u0627\u0643", "\u0641\u0631\u0648\u0646\u062a", "\u0648\u0627\u062c\u0647\u0629", "\u0645\u0648\u062f\u064a\u0644", "\u062a\u062f\u0631\u064a\u0628", "\u0639\u0635\u0628\u064a");
 
     private static bool IsCasualChat(string lower, string text)
     {

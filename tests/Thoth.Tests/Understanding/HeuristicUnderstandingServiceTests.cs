@@ -72,4 +72,18 @@ public sealed class HeuristicUnderstandingServiceTests
         Assert.Equal("general", result.Topic);
         Assert.False(result.RequiresTools);
     }
+
+    [Theory]
+    [InlineData("can you build a C# method")]
+    [InlineData("\u0641\u064a\u0646 \u0627\u0644 method \u062a\u0639\u0631\u0641 \u062a\u0639\u0645\u0644\u064a")]
+    public async Task UnderstandAsync_RoutesMethodRequestsToBackendTools(string text)
+    {
+        var service = new HeuristicUnderstandingService();
+
+        var result = await service.UnderstandAsync(new UnderstandingRequest(text, []));
+
+        Assert.Equal("workspace_task", result.Intent);
+        Assert.Equal("backend", result.Topic);
+        Assert.True(result.RequiresTools);
+    }
 }

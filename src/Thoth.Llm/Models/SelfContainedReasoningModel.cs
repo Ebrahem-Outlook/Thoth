@@ -16,6 +16,10 @@ public sealed class SelfContainedReasoningModel : IChatModel
         "\u0627\u0628\u0646\u064a",
         "\u0646\u0641\u0630",
         "\u0643\u0648\u062f",
+        "\u0645\u064a\u062b\u0648\u062f",
+        "\u0645\u064a\u062b\u062f",
+        "\u062f\u0627\u0644\u0629",
+        "\u0643\u0644\u0627\u0633",
         "\u0641\u0631\u0648\u0646\u062a",
         "\u0648\u0627\u062c\u0647\u0629",
         "\u0628\u0627\u0643",
@@ -32,8 +36,19 @@ public sealed class SelfContainedReasoningModel : IChatModel
         "route",
         "server",
         "dotnet",
+        ".net",
+        "c#",
+        "csharp",
+        "method",
+        "function",
+        "class",
+        "service",
         "asp.net",
-        "\u0628\u0627\u0643"
+        "\u0628\u0627\u0643",
+        "\u0645\u064a\u062b\u0648\u062f",
+        "\u0645\u064a\u062b\u062f",
+        "\u062f\u0627\u0644\u0629",
+        "\u0643\u0644\u0627\u0633"
     ];
 
     private static readonly string[] FrontendTerms =
@@ -217,7 +232,7 @@ public sealed class SelfContainedReasoningModel : IChatModel
                             LooksLikeBackendTask(lower) ||
                             LooksLikeFrontendTask(lower) ||
                             LooksLikeArchitectureTask(lower) ||
-                            ContainsAny(lower, "code", "file", "project", "repo", "workspace", "build", "test", "bug", "implement", "refactor") ||
+                            ContainsAny(lower, "code", "file", "project", "repo", "workspace", "build", "test", "bug", "implement", "refactor", "method", "function", "class", "c#", "csharp", ".net", "dotnet") ||
                             hasArabic && ContainsAny(message, ArabicWorkspaceTerms);
 
         var topic = signal.Topic != "general" ? signal.Topic :

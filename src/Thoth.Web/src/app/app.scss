@@ -1,7 +1,8 @@
 :host {
   display: block;
-  height: 100vh;
+  height: 100dvh;
   min-height: 0;
+  overflow: hidden;
   color: #1f2328;
   background: #f7f7f8;
 }
@@ -14,7 +15,8 @@
   position: relative;
   display: grid;
   grid-template-columns: 300px minmax(0, 1fr) 372px;
-  height: 100vh;
+  height: 100dvh;
+  max-height: 100dvh;
   min-height: 0;
   overflow: hidden;
   background: #fff;
@@ -274,12 +276,15 @@ button {
 .workspace {
   min-width: 0;
   min-height: 0;
+  max-height: 100dvh;
+  overflow: hidden;
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   background: #fff;
 }
 
 .topbar {
+  grid-row: 1;
   height: 58px;
   gap: 12px;
   padding: 0 18px;
@@ -301,6 +306,7 @@ button {
 }
 
 .error-strip {
+  grid-row: 2;
   margin: 10px 18px 0;
   min-height: 40px;
   border: 1px solid #fecaca;
@@ -324,11 +330,14 @@ button {
 }
 
 .messages {
+  grid-row: 3;
   min-height: 0;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   padding: 34px clamp(22px, 12vw, 210px) 38px;
   scroll-behavior: smooth;
+  scrollbar-gutter: stable;
 }
 
 .welcome {
@@ -595,6 +604,10 @@ button {
 }
 
 .composer-zone {
+  grid-row: 4;
+  position: relative;
+  z-index: 2;
+  min-height: 0;
   padding: 6px clamp(14px, 5vw, 80px) 8px;
   border-top: 1px solid #e5e7eb;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), #fff 36%);
