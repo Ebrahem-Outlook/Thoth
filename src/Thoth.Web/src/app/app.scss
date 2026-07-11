@@ -322,7 +322,7 @@ button {
 
 .messages {
   overflow: auto;
-  padding: 30px clamp(18px, 7vw, 112px) 36px;
+  padding: 34px clamp(22px, 12vw, 210px) 38px;
   scroll-behavior: smooth;
 }
 
@@ -386,8 +386,8 @@ button {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
   gap: 14px;
-  max-width: 980px;
-  margin: 0 auto 28px;
+  max-width: 920px;
+  margin: 0 auto 30px;
 }
 
 .message.user {
@@ -406,17 +406,17 @@ button {
   grid-row: 1;
   justify-self: end;
   width: fit-content;
-  max-width: min(720px, 82%);
+  max-width: min(680px, 78%);
   border-radius: 8px;
   background: #2f3437;
   color: #fff;
-  padding: 12px 14px;
+  padding: 12px 15px;
 }
 
 .message.assistant .message-body,
 .message.tool .message-body,
 .message.system .message-body {
-  max-width: 780px;
+  max-width: 760px;
 }
 
 .avatar {
@@ -468,7 +468,8 @@ button {
 
 .markdown {
   color: inherit;
-  line-height: 1.68;
+  font-size: 15.5px;
+  line-height: 1.72;
   word-break: break-word;
 }
 
@@ -916,9 +917,12 @@ button {
 
 @media (max-width: 1180px) {
   .shell,
-  .panel-collapsed,
-  .sidebar-collapsed {
+  .panel-collapsed {
     grid-template-columns: 280px minmax(0, 1fr);
+  }
+
+  .sidebar-collapsed {
+    grid-template-columns: 0 minmax(0, 1fr);
   }
 
   .inspector {
@@ -934,7 +938,7 @@ button {
   }
 }
 
-@media (max-width: 760px) {
+@media (max-width: 960px) {
   .shell,
   .panel-collapsed,
   .sidebar-collapsed {
@@ -962,7 +966,7 @@ button {
   }
 
   .messages {
-    padding: 22px 14px;
+    padding: 24px clamp(14px, 5vw, 44px);
   }
 
   .message,
@@ -986,7 +990,7 @@ button {
   }
 
   .composer-zone {
-    padding: 10px 12px 14px;
+    padding: 10px clamp(12px, 4vw, 34px) 14px;
   }
 
   .composer-options {

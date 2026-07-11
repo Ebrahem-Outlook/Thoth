@@ -33,7 +33,8 @@ public sealed class AgentEngineTests
         Assert.Contains(run.Steps, step => step.Invocation?.ToolName == "workspace.summary");
         Assert.Contains(run.Steps, step => step.Invocation?.ToolName == "workspace.map");
         Assert.Contains(run.Steps, step => step.Invocation?.ToolName == "file.read");
-        Assert.Contains("local semantic brain", run.FinalAnswer);
+        Assert.Contains("What I understood:", run.FinalAnswer);
+        Assert.Contains("Program.cs", run.FinalAnswer);
 
         var memories = await memory.RecentAsync(limit: 20);
         Assert.DoesNotContain(memories, record => record.Scope == "run");

@@ -108,7 +108,7 @@ export class App implements OnInit, OnDestroy {
   readonly lastRun = signal<AgentRun | null>(null);
   readonly activePanel = signal<SidePanel>('run');
   readonly sidebarOpen = signal(true);
-  readonly rightPanelOpen = signal(true);
+  readonly rightPanelOpen = signal(false);
   readonly busy = signal(false);
   readonly booting = signal(true);
   readonly error = signal('');
@@ -584,6 +584,6 @@ export class App implements OnInit, OnDestroy {
   }
 
   private isCompactViewport(): boolean {
-    return typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches;
+    return typeof window !== 'undefined' && window.matchMedia('(max-width: 960px)').matches;
   }
 }

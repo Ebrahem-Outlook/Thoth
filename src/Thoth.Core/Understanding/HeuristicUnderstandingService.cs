@@ -93,6 +93,19 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         var text = request.Text.Trim();
         var lower = text.ToLowerInvariant();
         var requiresVision = request.AttachmentContentTypes.Any(type => type.StartsWith("image/", StringComparison.OrdinalIgnoreCase));
+        if (IsCasualChat(lower, text) && !requiresVision)
+        {
+            return Task.FromResult(new UnderstandingResult(
+                "general_chat",
+                "general",
+                UnderstandingResult.DetectLanguage(text),
+                false,
+                false,
+                text.Length > 8000,
+                0.92,
+                text.Length > 600 ? text[..600] + "..." : text));
+        }
+
         var requiresTools = LooksLikeWorkspaceTask(lower) || LooksLikeFileTask(lower) || LooksLikeCommandTask(lower);
         var intent = requiresTools ? "workspace_task" : requiresVision ? "vision_chat" : "general_chat";
         var topic = InferTopic(lower, request.AttachmentContentTypes);
@@ -157,4 +170,12 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
 
     private static bool ContainsAny(string value, params string[] terms) =>
         terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsCasualChat(string lower, string text)
+    {
+        var normalized = lower.Trim().Trim('.', '!', '?');
+        return normalized is "hi" or "hello" or "hey" or "yo" or "sup" or "thanks" or "thank you" ||
+               ContainsAny(lower, "do you understand me", "understand me", "are you following", "got me") ||
+               ContainsAny(text, "\u0627\u0647\u0644\u0627", "\u0623\u0647\u0644\u0627", "\u0645\u0631\u062d\u0628\u0627", "\u0633\u0644\u0627\u0645", "\u0627\u0632\u064a\u0643", "\u0634\u0643\u0631\u0627", "\u0627\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a", "\u0623\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a", "\u0641\u0627\u0647\u0645\u0646\u064a", "\u0641\u0647\u0645\u062a\u0646\u064a");
+    }
 }

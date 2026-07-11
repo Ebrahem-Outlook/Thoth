@@ -58,4 +58,18 @@ public sealed class HeuristicUnderstandingServiceTests
         Assert.Equal("model", result.Topic);
         Assert.True(result.RequiresTools);
     }
+
+    [Theory]
+    [InlineData("Hello")]
+    [InlineData("\u0627\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a")]
+    public async Task UnderstandAsync_KeepsCasualChatGeneral(string text)
+    {
+        var service = new HeuristicUnderstandingService();
+
+        var result = await service.UnderstandAsync(new UnderstandingRequest(text, []));
+
+        Assert.Equal("general_chat", result.Intent);
+        Assert.Equal("general", result.Topic);
+        Assert.False(result.RequiresTools);
+    }
 }

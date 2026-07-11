@@ -60,11 +60,27 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("Request: Review the backend API endpoints and summarize them", response.Content);
-        Assert.Contains("Backend findings:", response.Content);
+        Assert.Contains("You asked: Review the backend API endpoints and summarize them", response.Content);
+        Assert.Contains("What I found:", response.Content);
         Assert.Contains("GET /health", response.Content);
+        Assert.DoesNotContain("Tools used:", response.Content);
         Assert.False(response.Content.StartsWith("{", StringComparison.Ordinal));
         Assert.DoesNotContain("Intent understood:\r\n- Review the backend API endpoints and summarize them    Plan:", response.Content);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_UnderstandingCheckGetsNaturalDirectReply()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [new ChatMessage(ChatRole.User, "\u0627\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a")],
+            "thoth-self",
+            0));
+
+        Assert.Contains("\u0641\u0627\u0647\u0645\u0643", response.Content);
+        Assert.DoesNotContain("I read it as", response.Content);
+        Assert.DoesNotContain("Detected topic", response.Content);
     }
 
     [Fact]
@@ -110,5 +126,29 @@ public sealed class SelfContainedReasoningModelTests
         Assert.Equal("workspace_task", json.RootElement.GetProperty("intent").GetString());
         Assert.Equal("model", json.RootElement.GetProperty("topic").GetString());
         Assert.True(json.RootElement.GetProperty("requiresTools").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("Hello")]
+    [InlineData("\u0627\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a")]
+    public async Task CompleteAsync_UnderstandingKeepsCasualChatOutOfTools(string message)
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.User, $"""
+                Classify the user's message.
+                User message:
+                {message}
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        using var json = JsonDocument.Parse(response.Content);
+        Assert.Equal("general_chat", json.RootElement.GetProperty("intent").GetString());
+        Assert.Equal("general", json.RootElement.GetProperty("topic").GetString());
+        Assert.False(json.RootElement.GetProperty("requiresTools").GetBoolean());
     }
 }

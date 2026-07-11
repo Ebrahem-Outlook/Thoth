@@ -37,17 +37,29 @@ internal static class LocalSemanticBrain
         var text = goal.Trim();
         var lower = text.ToLowerInvariant();
         var language = HasArabic(text) ? "ar" : "en";
+        var keywords = ExtractKeywords(text, 8);
+
+        if (IsCasualChat(lower, text))
+        {
+            return new BrainSignal("general", "chat", language, 0.92, SingleLine(text, 240), keywords, false);
+        }
+
         var topic = Classify(text, TopicPatterns, "general", out var topicScore);
         var action = Classify(text, ActionPatterns, "chat", out var actionScore);
 
         topic = OverrideTopic(lower, topic);
         action = OverrideAction(lower, action);
 
-        var keywords = ExtractKeywords(text, 8);
-        var requiresTools = topic is not "general" ||
-                            action is "inspect" or "build" or "fix" or "train" or "test" ||
-                            ContainsAny(lower, "workspace", "project", "repo", "file", "code", "backend", "frontend", "api") ||
-                            ContainsAny(text, "\u0645\u0634\u0631\u0648\u0639", "\u0643\u0648\u062f", "\u0628\u0627\u0643", "\u0641\u0631\u0648\u0646\u062a", "\u0645\u0648\u062f\u064a\u0644");
+        var explicitToolSignal = HasExplicitToolSignal(lower, text);
+        if (!explicitToolSignal && keywords.Count <= 3)
+        {
+            topic = "general";
+            action = "chat";
+        }
+
+        var requiresTools = explicitToolSignal &&
+                            (topic is not "general" ||
+                             action is "inspect" or "build" or "fix" or "train" or "test");
 
         var confidence = Math.Clamp(Math.Max(topicScore, actionScore), 0.58, 0.95);
         return new BrainSignal(topic, action, language, confidence, SingleLine(text, 240), keywords, requiresTools);
@@ -93,22 +105,15 @@ internal static class LocalSemanticBrain
         var builder = new StringBuilder();
 
         builder.AppendLine(signal.Language == "ar"
-            ? "\u0641\u0647\u0645\u062a \u0627\u0644\u0637\u0644\u0628 \u0648\u0634\u063a\u0644\u062a \u062a\u062d\u0644\u064a\u0644 Thoth \u0627\u0644\u0645\u062d\u0644\u064a \u0639\u0644\u0649 \u0627\u0644\u0645\u0634\u0631\u0648\u0639."
-            : "I inspected the request with Thoth's local semantic brain and workspace tools.");
+            ? "\u0641\u0627\u0647\u0645\u0643. \u0643\u0633\u0631\u062a \u0627\u0644\u0637\u0644\u0628 \u0644\u062a\u0635\u0646\u064a\u0641 \u0645\u062d\u0644\u064a\u060c \u0648\u0641\u062d\u0635\u062a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0648\u0627\u0644\u0623\u062f\u0648\u0627\u062a \u0642\u0628\u0644 \u0645\u0627 \u0623\u0631\u062f."
+            : "I broke the request down locally, checked the workspace evidence, and then formed the answer.");
         builder.AppendLine();
-        builder.AppendLine("Understanding:");
-        builder.AppendLine($"- Request: {signal.Summary}");
-        builder.AppendLine($"- Topic: {signal.Topic}; action: {signal.Action}; confidence: {signal.Confidence:0.00}");
-
-        if (signal.Keywords.Count > 0)
-        {
-            builder.AppendLine($"- Focus terms: {string.Join(", ", signal.Keywords)}");
-        }
+        AppendUnderstanding(builder, signal);
 
         builder.AppendLine();
         AppendFindings(builder, signal, insights);
         AppendEvidence(builder, signal, insights);
-        AppendTools(builder, insights);
+        AppendToolSummary(builder, signal, insights);
         AppendNextMove(builder, signal, insights);
 
         return builder.ToString().Trim();
@@ -119,17 +124,31 @@ internal static class LocalSemanticBrain
         var signal = AnalyzeGoal(text);
         var builder = new StringBuilder();
 
+        if (IsUnderstandingCheck(text.ToLowerInvariant(), text))
+        {
+            return signal.Language == "ar"
+                ? "\u0623\u064a\u0648\u0647 \u0641\u0627\u0647\u0645\u0643. \u0627\u0644\u0644\u064a \u0628\u062a\u0633\u0623\u0644\u0647 \u0647\u0646\u0627 \u0645\u0634 \u0645\u0647\u0645\u0629 \u0628\u0627\u0643 \u0623\u0648 \u0643\u0648\u062f\u060c \u062f\u0647 \u0633\u0624\u0627\u0644 \u0639\u0627\u062f\u064a \u0648\u0647\u0631\u062f \u0639\u0644\u064a\u0647 \u0639\u0644\u0649 \u0647\u0630\u0627 \u0627\u0644\u0623\u0633\u0627\u0633."
+                : "Yes, I understand you. This is normal conversation, not a workspace task, so I should answer directly without running tools.";
+        }
+
+        if (!signal.RequiresTools)
+        {
+            return signal.Language == "ar"
+                ? "\u0641\u0627\u0647\u0645\u0643. \u062f\u0647 \u0643\u0644\u0627\u0645 \u0639\u0627\u062f\u064a\u060c \u0641\u0647\u0631\u062f \u0639\u0644\u064a\u0643 \u0645\u0628\u0627\u0634\u0631\u0629 \u0645\u0646 \u063a\u064a\u0631 \u062a\u0634\u063a\u064a\u0644 \u0623\u062f\u0648\u0627\u062a \u0623\u0648 \u062a\u062e\u0645\u064a\u0646 \u0625\u0646\u0647 \u0637\u0644\u0628 \u0643\u0648\u062f."
+                : "I understand. This is normal conversation, so I should answer directly without running tools or pretending it is a code task.";
+        }
+
         if (signal.Language == "ar")
         {
-            builder.AppendLine("\u0641\u0627\u0647\u0645\u0643. \u0627\u0644\u0637\u0644\u0628 \u0628\u0627\u064a\u0646 \u0625\u0646\u0647 \u0645\u062d\u062a\u0627\u062c \u062a\u062d\u0644\u064a\u0644 \u0645\u062d\u0644\u064a \u0648\u0623\u062f\u0648\u0627\u062a \u0644\u0648 \u0647\u0648 \u0639\u0644\u0649 \u0627\u0644\u0645\u0634\u0631\u0648\u0639.");
+            builder.AppendLine("\u0641\u0627\u0647\u0645\u0643. \u062f\u0647 \u0628\u0627\u064a\u0646 \u0637\u0644\u0628 \u0639\u0644\u0649 \u0627\u0644\u0645\u0634\u0631\u0648\u0639\u060c \u0641\u0627\u0644\u0635\u062d \u0625\u0646\u064a \u0623\u0641\u062d\u0635 \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0648\u0627\u0644\u0623\u062f\u0648\u0627\u062a \u0642\u0628\u0644 \u0627\u0644\u0631\u062f.");
         }
         else
         {
-            builder.AppendLine("I understand the request. For project questions, I should inspect local files and tool output before answering.");
+            builder.AppendLine("I understand the request. This looks project-related, so I should inspect local files and tool output before answering.");
         }
 
         builder.AppendLine();
-        builder.AppendLine($"Detected topic: {signal.Topic}; action: {signal.Action}; confidence: {signal.Confidence:0.00}.");
+        builder.AppendLine($"I read it as a {signal.Topic}/{signal.Action} task with confidence {signal.Confidence:0.00}.");
 
         if (hasImage)
         {
@@ -143,17 +162,27 @@ internal static class LocalSemanticBrain
         return builder.ToString().Trim();
     }
 
+    private static void AppendUnderstanding(StringBuilder builder, BrainSignal signal)
+    {
+        builder.AppendLine(signal.Language == "ar" ? "\u0627\u0644\u0644\u064a \u0641\u0647\u0645\u062a\u0647:" : "What I understood:");
+        builder.AppendLine(signal.Language == "ar"
+            ? $"- \u0623\u0646\u062a \u0628\u062a\u0637\u0644\u0628: {signal.Summary}"
+            : $"- You asked: {signal.Summary}");
+        builder.AppendLine(signal.Language == "ar"
+            ? $"- \u0627\u0644\u062a\u0635\u0646\u064a\u0641: {signal.Topic} / {signal.Action} ({signal.Confidence:0.00})"
+            : $"- Local classification: {signal.Topic} / {signal.Action} ({signal.Confidence:0.00})");
+
+        if (signal.Keywords.Count > 0)
+        {
+            builder.AppendLine(signal.Language == "ar"
+                ? $"- \u0643\u0644\u0645\u0627\u062a \u0645\u062d\u0648\u0631\u064a\u0629: {string.Join(", ", signal.Keywords)}"
+                : $"- Focus terms: {string.Join(", ", signal.Keywords)}");
+        }
+    }
+
     private static void AppendFindings(StringBuilder builder, BrainSignal signal, ObservationInsights insights)
     {
-        builder.AppendLine(signal.Topic switch
-        {
-            "backend" => "Backend findings:",
-            "frontend" => "Frontend findings:",
-            "model" => "Model/brain findings:",
-            "debugging" => "Debug findings:",
-            "testing" => "Validation findings:",
-            _ => "Findings:"
-        });
+        builder.AppendLine(signal.Language == "ar" ? "\u0627\u0644\u0644\u064a \u0644\u0642\u064a\u062a\u0647:" : "What I found:");
 
         if (signal.Topic == "backend" && insights.Routes.Count > 0)
         {
@@ -165,8 +194,9 @@ internal static class LocalSemanticBrain
         }
         else if (signal.Topic == "model")
         {
-            builder.AppendLine("- The current model is local and self-contained; it is not calling an external LLM.");
-            builder.AppendLine("- The new semantic brain uses trained local pattern centroids, hashed embeddings, tool evidence ranking, and task-specific synthesis.");
+            builder.AppendLine("- The current runtime is local and self-contained; this path does not call an external LLM.");
+            builder.AppendLine("- The brain layer separates casual chat from workspace tasks before the agent loop.");
+            builder.AppendLine("- For project tasks it uses local pattern centroids, hashed embeddings, evidence ranking, and task-specific synthesis.");
             AppendIfAny(builder, "Relevant model symbols", insights.Symbols.Where(symbol =>
                 ContainsAny(symbol, "Model", "Engine", "Planner", "Understanding", "Orchestrator")));
         }
@@ -190,7 +220,7 @@ internal static class LocalSemanticBrain
 
         if (insights.Routes.Count == 0 && insights.Evidence.Count == 0 && insights.Failures.Count == 0)
         {
-            builder.AppendLine("- I did not get enough useful tool evidence. The next plan should read more targeted files.");
+            builder.AppendLine("- I did not get enough useful evidence from this run. The next pass should read more targeted files.");
         }
     }
 
@@ -212,33 +242,29 @@ internal static class LocalSemanticBrain
         }
 
         builder.AppendLine();
-        builder.AppendLine("Most relevant evidence:");
+        builder.AppendLine(signal.Language == "ar" ? "\u0623\u0647\u0645 \u0625\u0634\u0627\u0631\u0627\u062a \u0627\u062a\u0641\u062d\u0635\u062a:" : "Most relevant evidence:");
         foreach (var line in evidence)
         {
             builder.AppendLine($"- {line}");
         }
     }
 
-    private static void AppendTools(StringBuilder builder, ObservationInsights insights)
+    private static void AppendToolSummary(StringBuilder builder, BrainSignal signal, ObservationInsights insights)
     {
-        builder.AppendLine();
-        builder.AppendLine("Tools used:");
         if (insights.ToolNames.Count == 0)
         {
-            builder.AppendLine("- none");
             return;
         }
 
-        foreach (var tool in insights.ToolNames)
-        {
-            builder.AppendLine($"- {tool}");
-        }
+        builder.AppendLine();
+        builder.AppendLine(signal.Language == "ar" ? "\u0641\u062d\u0635\u062a \u0645\u062d\u0644\u064a\u0627:" : "Checked locally:");
+        builder.AppendLine($"- {string.Join(", ", insights.ToolNames.Take(8))}");
     }
 
     private static void AppendNextMove(StringBuilder builder, BrainSignal signal, ObservationInsights insights)
     {
         builder.AppendLine();
-        builder.AppendLine("Next best move:");
+        builder.AppendLine(signal.Language == "ar" ? "\u0627\u0644\u062e\u0637\u0648\u0629 \u0627\u0644\u062c\u0627\u064a\u0629:" : "Next best move:");
         var move = signal.Topic switch
         {
             "backend" when signal.Action is "fix" or "build" => "Add or update backend tests around the exact endpoint/flow, then change the route/service code.",
@@ -364,7 +390,7 @@ internal static class LocalSemanticBrain
             .FirstOrDefault();
 
         score = best?.Score ?? 0;
-        return best is null || best.Score < 0.03 ? fallback : best.Label;
+        return best is null || best.Score < 0.14 ? fallback : best.Label;
     }
 
     private static TrainedPattern[] Train(IEnumerable<TrainingExample> examples)
@@ -515,6 +541,22 @@ internal static class LocalSemanticBrain
 
     private static bool ContainsAny(string value, params string[] terms) =>
         terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasExplicitToolSignal(string lower, string text) =>
+        ContainsAny(lower, "workspace", "project", "repo", "file", ".cs", ".ts", ".html", ".scss", "code", "backend", "frontend", "api", "endpoint", "bug", "fix", "build", "implement", "refactor", "model", "llm", "train", "neural", "reasoning") ||
+        ContainsAny(text, "\u0645\u0634\u0631\u0648\u0639", "\u0645\u0644\u0641", "\u0643\u0648\u062f", "\u0628\u0627\u0643", "\u0641\u0631\u0648\u0646\u062a", "\u0648\u0627\u062c\u0647\u0629", "\u0645\u0648\u062f\u064a\u0644", "\u062a\u062f\u0631\u064a\u0628", "\u0639\u0635\u0628\u064a");
+
+    private static bool IsCasualChat(string lower, string text)
+    {
+        var normalized = lower.Trim().Trim('.', '!', '?');
+        return normalized is "hi" or "hello" or "hey" or "yo" or "sup" or "thanks" or "thank you" ||
+               IsUnderstandingCheck(lower, text) ||
+               ContainsAny(text, "\u0627\u0647\u0644\u0627", "\u0623\u0647\u0644\u0627", "\u0645\u0631\u062d\u0628\u0627", "\u0633\u0644\u0627\u0645", "\u0627\u0632\u064a\u0643", "\u0639\u0627\u0645\u0644 \u0627\u064a\u0647", "\u0634\u0643\u0631\u0627");
+    }
+
+    private static bool IsUnderstandingCheck(string lower, string text) =>
+        ContainsAny(lower, "do you understand me", "understand me", "are you following", "got me") ||
+        ContainsAny(text, "\u0627\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a", "\u0623\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a", "\u0641\u0627\u0647\u0645\u0646\u064a", "\u0641\u0647\u0645\u062a\u0646\u064a", "\u0641\u0627\u0647\u0645 \u0643\u0644\u0627\u0645\u064a");
 
     private static bool HasArabic(string text) => text.Any(c => c >= 0x0600 && c <= 0x06FF);
 
