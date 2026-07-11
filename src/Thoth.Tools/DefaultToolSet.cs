@@ -18,6 +18,7 @@ public static class DefaultToolSet
             .Register(new FileReadTool())
             .Register(new FileSearchTool())
             .Register(new FileWriteTool())
+            .Register(new FilePatchTool())
             .Register(new MemorySearchTool())
             .Register(new MemoryRecentTool())
             .Register(new MemoryWriteTool())

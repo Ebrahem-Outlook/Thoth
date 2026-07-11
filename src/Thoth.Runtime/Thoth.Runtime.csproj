@@ -6,6 +6,9 @@
     <ProjectReference Include="..\Thoth.Tools\Thoth.Tools.csproj" />
     <ProjectReference Include="..\Thoth.Memory\Thoth.Memory.csproj" />
     <ProjectReference Include="..\Thoth.Sandbox\Thoth.Sandbox.csproj" />
+    <ProjectReference Include="..\Thoth.Inference\Thoth.Inference.csproj" />
+    <ProjectReference Include="..\Thoth.Model\Thoth.Model.csproj" />
+    <ProjectReference Include="..\Thoth.Tokenization\Thoth.Tokenization.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using Thoth.Core.Memory;
 
@@ -39,6 +40,10 @@ public sealed class SqliteMemoryStore(string databasePath) : IMemoryStore
         CancellationToken cancellationToken = default)
     {
         await EnsureCreatedAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            throw new ArgumentException("Memory content cannot be empty.", nameof(content));
+        }
 
         var record = new MemoryRecord(
             Guid.NewGuid(),
@@ -72,31 +77,55 @@ public sealed class SqliteMemoryStore(string databasePath) : IMemoryStore
         CancellationToken cancellationToken = default)
     {
         await EnsureCreatedAsync(cancellationToken);
+        var safeLimit = Math.Clamp(limit, 0, 200);
+        if (safeLimit == 0)
+        {
+            return [];
+        }
+
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return await RecentAsync(scope, safeLimit, cancellationToken);
+        }
 
         await using var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken);
-
         var command = connection.CreateCommand();
-        var where = string.IsNullOrWhiteSpace(scope)
-            ? "content LIKE $query"
-            : "scope = $scope AND content LIKE $query";
-
-        command.CommandText = $"""
-        SELECT id, scope, content, created_at, metadata_json
-        FROM memories
-        WHERE {where}
-        ORDER BY created_at DESC
-        LIMIT $limit;
-        """;
-
-        command.Parameters.AddWithValue("$query", $"%{query}%");
-        command.Parameters.AddWithValue("$limit", Math.Max(limit, 0));
+        command.CommandText = string.IsNullOrWhiteSpace(scope)
+            ? """
+              SELECT id, scope, content, created_at, metadata_json
+              FROM memories
+              ORDER BY created_at DESC
+              LIMIT $candidateLimit;
+              """
+            : """
+              SELECT id, scope, content, created_at, metadata_json
+              FROM memories
+              WHERE scope = $scope
+              ORDER BY created_at DESC
+              LIMIT $candidateLimit;
+              """;
+        command.Parameters.AddWithValue("$candidateLimit", Math.Clamp(safeLimit * 50, 200, 2000));
         if (!string.IsNullOrWhiteSpace(scope))
         {
             command.Parameters.AddWithValue("$scope", scope);
         }
 
-        return await ReadRecordsAsync(command, cancellationToken);
+        var candidates = await ReadRecordsAsync(command, cancellationToken);
+        var queryTokens = Tokenize(query).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        if (queryTokens.Length == 0)
+        {
+            return candidates.Take(safeLimit).ToArray();
+        }
+
+        return candidates
+            .Select(record => new { Record = record, Score = Score(query, queryTokens, record) })
+            .Where(item => item.Score > 0)
+            .OrderByDescending(item => item.Score)
+            .ThenByDescending(item => item.Record.CreatedAt)
+            .Take(safeLimit)
+            .Select(item => item.Record)
+            .ToArray();
     }
 
     public async Task<IReadOnlyList<MemoryRecord>> RecentAsync(
@@ -125,7 +154,7 @@ public sealed class SqliteMemoryStore(string databasePath) : IMemoryStore
               LIMIT $limit;
               """;
 
-        command.Parameters.AddWithValue("$limit", Math.Max(limit, 0));
+        command.Parameters.AddWithValue("$limit", Math.Clamp(limit, 0, 200));
         if (!string.IsNullOrWhiteSpace(scope))
         {
             command.Parameters.AddWithValue("$scope", scope);
@@ -134,10 +163,49 @@ public sealed class SqliteMemoryStore(string databasePath) : IMemoryStore
         return await ReadRecordsAsync(command, cancellationToken);
     }
 
-    private SqliteConnection CreateConnection()
+    private static double Score(string query, IReadOnlyList<string> queryTokens, MemoryRecord record)
     {
-        return new SqliteConnection($"Data Source={databasePath}");
+        var contentTokens = Tokenize(record.Content).ToArray();
+        if (contentTokens.Length == 0)
+        {
+            return 0;
+        }
+
+        var frequencies = contentTokens
+            .GroupBy(token => token, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(group => group.Key, group => group.Count(), StringComparer.OrdinalIgnoreCase);
+        var matched = 0;
+        var frequencyScore = 0.0;
+
+        foreach (var token in queryTokens)
+        {
+            if (!frequencies.TryGetValue(token, out var frequency))
+            {
+                continue;
+            }
+
+            matched++;
+            frequencyScore += 1.0 + Math.Log(1.0 + frequency);
+        }
+
+        if (matched == 0)
+        {
+            return 0;
+        }
+
+        var coverage = matched / (double)queryTokens.Count;
+        var exactPhrase = record.Content.Contains(query, StringComparison.OrdinalIgnoreCase) ? 4.0 : 0.0;
+        var ageDays = Math.Max((DateTimeOffset.UtcNow - record.CreatedAt).TotalDays, 0);
+        var recency = 0.75 / (1.0 + ageDays / 45.0);
+        return exactPhrase + coverage * 6.0 + frequencyScore / queryTokens.Count + recency;
     }
+
+    private static IEnumerable<string> Tokenize(string value) =>
+        Regex.Matches(value.ToLowerInvariant(), @"[\p{L}\p{N}_-]{2,}")
+            .Select(match => match.Value);
+
+    private SqliteConnection CreateConnection() =>
+        new($"Data Source={databasePath}");
 
     private static async Task<IReadOnlyList<MemoryRecord>> ReadRecordsAsync(
         SqliteCommand command,
@@ -149,7 +217,8 @@ public sealed class SqliteMemoryStore(string databasePath) : IMemoryStore
         while (await reader.ReadAsync(cancellationToken))
         {
             var metadataJson = reader.GetString(4);
-            var metadata = JsonSerializer.Deserialize<Dictionary<string, string>>(metadataJson) ?? new Dictionary<string, string>();
+            var metadata = JsonSerializer.Deserialize<Dictionary<string, string>>(metadataJson) ??
+                           new Dictionary<string, string>();
 
             records.Add(new MemoryRecord(
                 Guid.ParseExact(reader.GetString(0), "N"),

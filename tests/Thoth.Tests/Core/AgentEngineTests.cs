@@ -1,7 +1,6 @@
 using Thoth.Core.Agent;
 using Thoth.Core.Configuration;
 using Thoth.Core.Memory;
-using Thoth.Core.Planning;
 using Thoth.Llm.Models;
 using Thoth.Sandbox.Policies;
 using Thoth.Tools;
@@ -20,8 +19,8 @@ public sealed class AgentEngineTests
         var model = new SelfContainedReasoningModel();
         var tools = DefaultToolSet.Create(TimeSpan.FromSeconds(2));
         var policy = new LocalExecutionPolicy(new SandboxOptions());
-        var planner = new JsonAgentPlanner(model, new HeuristicAgentPlanner());
-        var engine = new AgentEngine(model, planner, tools, memory, policy);
+        var decisions = new ModelAgentDecisionService(model, new HeuristicAgentDecisionService());
+        var engine = new AgentEngine(model, decisions, tools, memory, policy);
 
         var run = await engine.RunAsync(new AgentRequest(
             "summarize Program.cs in this workspace",

@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Thoth.Core.Chat;
@@ -11,7 +12,7 @@ namespace Thoth.Core.Agent;
 
 public sealed class AgentEngine(
     IChatModel chatModel,
-    IAgentPlanner planner,
+    IAgentDecisionService decisions,
     IToolRegistry tools,
     IMemoryStore memory,
     IExecutionPolicy policy,
@@ -29,45 +30,87 @@ public sealed class AgentEngine(
         var runId = Guid.NewGuid();
         var startedAt = DateTimeOffset.UtcNow;
         var workingDirectory = Path.GetFullPath(request.WorkingDirectory);
-
         if (!Directory.Exists(workingDirectory))
         {
             throw new DirectoryNotFoundException($"Working directory does not exist: {workingDirectory}");
         }
 
         await memory.EnsureCreatedAsync(cancellationToken);
-        var relevantMemories = (await memory.SearchAsync(request.Goal, "project", limit: 6, cancellationToken: cancellationToken))
+        var relevantMemories = (await memory.SearchAsync(
+                request.Goal,
+                "project",
+                limit: 6,
+                cancellationToken: cancellationToken))
             .Where(record => !string.Equals(record.Scope, "run", StringComparison.OrdinalIgnoreCase))
             .Take(6)
             .ToArray();
 
-        var planningContext = new AgentPlanningContext(request, relevantMemories, tools.List());
-        var plan = await planner.CreatePlanAsync(planningContext, cancellationToken);
+        var normalizedRequest = request with { WorkingDirectory = workingDirectory };
         var toolContext = new ToolContext(workingDirectory, memory, policy, request.DryRun);
         var executedSteps = new List<AgentStep>();
+        var planSteps = new List<AgentPlanStep>();
+        var callCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+        string? finalAnswer = null;
+        var stopReason = string.Empty;
 
-        foreach (var planStep in plan.Steps.Take(Math.Max(request.MaxSteps, 0)))
+        for (var index = 0; index < Math.Max(request.MaxSteps, 0); index++)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var stepStartedAt = DateTimeOffset.UtcNow;
-            ToolResult? result = null;
+            var decision = await decisions.DecideAsync(
+                new AgentDecisionContext(normalizedRequest, relevantMemories, tools.List(), executedSteps),
+                cancellationToken);
 
-            if (planStep.Invocation is not null)
+            if (decision.Kind == AgentDecisionKind.Final)
             {
-                result = await ExecuteToolAsync(planStep.Invocation, toolContext, cancellationToken);
+                finalAnswer = decision.Answer;
+                stopReason = decision.Rationale;
+                break;
             }
 
-            executedSteps.Add(new AgentStep(
+            if (decision.Kind == AgentDecisionKind.Stop || decision.Invocation is null)
+            {
+                stopReason = decision.Rationale;
+                break;
+            }
+
+            var fingerprint = BuildFingerprint(decision.Invocation);
+            callCounts.TryGetValue(fingerprint, out var repeats);
+            repeats++;
+            callCounts[fingerprint] = repeats;
+            if (repeats > 2)
+            {
+                stopReason = $"Stopped a repeated tool loop for {decision.Invocation.ToolName}.";
+                break;
+            }
+
+            var stepStartedAt = DateTimeOffset.UtcNow;
+            var result = await ExecuteToolAsync(decision.Invocation, toolContext, cancellationToken);
+            var step = new AgentStep(
                 executedSteps.Count + 1,
-                planStep.Thought,
-                planStep.Invocation,
+                decision.Rationale,
+                decision.Invocation,
                 result,
                 stepStartedAt,
-                DateTimeOffset.UtcNow));
+                DateTimeOffset.UtcNow);
+            executedSteps.Add(step);
+            planSteps.Add(new AgentPlanStep(decision.Rationale, decision.Invocation));
         }
 
-        var finalAnswer = await SynthesizeFinalAnswerAsync(request, plan, executedSteps, cancellationToken);
-        var succeeded = executedSteps.All(step => step.Result is null || step.Result.Succeeded);
+        if (string.IsNullOrWhiteSpace(finalAnswer))
+        {
+            finalAnswer = await SynthesizeFinalAnswerAsync(
+                normalizedRequest,
+                executedSteps,
+                stopReason,
+                cancellationToken);
+        }
+
+        var plan = new AgentPlan(
+            "Iterative observe-decide-act execution. Each action was chosen after the previous observation.",
+            planSteps,
+            "iterative-decision-loop");
+        var succeeded = executedSteps.All(step => step.Result is null || step.Result.Succeeded) &&
+                        !string.IsNullOrWhiteSpace(finalAnswer);
 
         await memory.AddAsync(
             "project",
@@ -76,7 +119,8 @@ public sealed class AgentEngine(
             {
                 ["runId"] = runId.ToString("N"),
                 ["succeeded"] = succeeded.ToString(),
-                ["kind"] = "agent_outcome"
+                ["kind"] = "agent_outcome",
+                ["steps"] = executedSteps.Count.ToString()
             },
             cancellationToken);
 
@@ -86,7 +130,7 @@ public sealed class AgentEngine(
             workingDirectory,
             plan,
             executedSteps,
-            finalAnswer,
+            finalAnswer.Trim(),
             succeeded,
             startedAt,
             DateTimeOffset.UtcNow);
@@ -114,17 +158,21 @@ public sealed class AgentEngine(
             logger.LogInformation("Running tool {ToolName}", invocation.ToolName);
             return await tool.InvokeAsync(invocation, context, cancellationToken);
         }
-        catch (Exception ex)
+        catch (OperationCanceledException)
         {
-            logger.LogError(ex, "Tool {ToolName} failed", invocation.ToolName);
-            return ToolResult.Failure(invocation.ToolName, ex.Message);
+            throw;
+        }
+        catch (Exception exception)
+        {
+            logger.LogError(exception, "Tool {ToolName} failed", invocation.ToolName);
+            return ToolResult.Failure(invocation.ToolName, exception.Message);
         }
     }
 
     private async Task<string> SynthesizeFinalAnswerAsync(
         AgentRequest request,
-        AgentPlan plan,
         IReadOnlyList<AgentStep> steps,
+        string stopReason,
         CancellationToken cancellationToken)
     {
         var observations = new StringBuilder();
@@ -133,13 +181,13 @@ public sealed class AgentEngine(
             observations.AppendLine($"Step {step.Index}: {step.Thought}");
             if (step.Invocation is not null)
             {
-                observations.AppendLine($"Tool: {step.Invocation.ToolName}");
+                observations.AppendLine($"Tool: {step.Invocation.ToolName} {JsonSerializer.Serialize(step.Invocation.Arguments)}");
             }
 
             if (step.Result is not null)
             {
                 observations.AppendLine($"Succeeded: {step.Result.Succeeded}");
-                observations.AppendLine(Trim(step.Result.Content, 2000));
+                observations.AppendLine(Trim(step.Result.Content, 3000));
             }
 
             observations.AppendLine();
@@ -148,18 +196,18 @@ public sealed class AgentEngine(
         var response = await chatModel.CompleteAsync(
             new ChatRequest(
                 [
-                    new ChatMessage(ChatRole.System, "You are Thoth, a precise AI agent. Summarize what happened and the next best action."),
+                    new ChatMessage(ChatRole.System, "You are Thoth. Answer only from the collected evidence, mention uncertainty, and give the next concrete action."),
                     new ChatMessage(ChatRole.User, $"""
                     Goal:
                     {request.Goal}
 
-                    Plan:
-                    {plan.Summary}
+                    Stop reason:
+                    {stopReason}
 
                     Observations:
                     {observations}
 
-                    Write a direct, useful final answer.
+                    Write a direct final answer. Do not claim a command, build, or test succeeded unless an observation proves it.
                     """)
                 ],
                 request.Model,
@@ -167,74 +215,47 @@ public sealed class AgentEngine(
             cancellationToken);
 
         return string.IsNullOrWhiteSpace(response.Content)
-            ? "The agent completed its run but produced no final message."
+            ? BuildEvidenceFallback(request.Goal, steps, stopReason)
             : response.Content.Trim();
     }
 
-    private static string Trim(string value, int maxLength)
-    {
-        if (value.Length <= maxLength)
-        {
-            return value;
-        }
-
-        return value[..maxLength] + "\n[truncated]";
-    }
-
-    private static string BuildProjectMemory(
+    private static string BuildEvidenceFallback(
         string goal,
-        string finalAnswer)
+        IReadOnlyList<AgentStep> steps,
+        string stopReason)
     {
         var builder = new StringBuilder();
-        builder.AppendLine($"Task: {Trim(SingleLine(goal), 220)}");
-        builder.AppendLine($"Outcome: {Trim(BuildOutcomeSummary(finalAnswer), 520)}");
+        builder.AppendLine($"Goal: {goal}");
+        builder.AppendLine();
+        builder.AppendLine("Observed:");
+        foreach (var step in steps)
+        {
+            builder.AppendLine($"- {step.Invocation?.ToolName ?? "no tool"}: {(step.Result?.Succeeded == true ? "succeeded" : "failed")}");
+            if (step.Result is not null)
+            {
+                builder.AppendLine($"  {Trim(SingleLine(step.Result.Content), 500)}");
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(stopReason))
+        {
+            builder.AppendLine();
+            builder.AppendLine($"Stopped because: {stopReason}");
+        }
 
         return builder.ToString().Trim();
     }
 
-    private static string BuildOutcomeSummary(string finalAnswer)
-    {
-        var lines = finalAnswer
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var summary = new List<string>();
-        var skipNextIntentBullet = false;
+    private static string BuildFingerprint(ToolInvocation invocation) =>
+        invocation.ToolName.ToLowerInvariant() + ":" + JsonSerializer.Serialize(
+            invocation.Arguments.OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase));
 
-        foreach (var line in lines)
-        {
-            if (line.StartsWith("Tools used:", StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith("Next best move:", StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith("Step ", StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith("Tool:", StringComparison.OrdinalIgnoreCase))
-            {
-                break;
-            }
+    private static string Trim(string value, int maximum) =>
+        value.Length <= maximum ? value : value[..maximum] + "\n[truncated]";
 
-            if (line.StartsWith("Thoth self-run complete", StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith("I inspected the workspace", StringComparison.OrdinalIgnoreCase) ||
-                line.StartsWith("Arabic request detected", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            if (line.StartsWith("Intent understood:", StringComparison.OrdinalIgnoreCase))
-            {
-                skipNextIntentBullet = true;
-                continue;
-            }
-
-            if (skipNextIntentBullet && line.StartsWith("- ", StringComparison.Ordinal))
-            {
-                skipNextIntentBullet = false;
-                continue;
-            }
-
-            skipNextIntentBullet = false;
-            summary.Add(line);
-        }
-
-        return SingleLine(string.Join(" ", summary.Take(6)));
-    }
+    private static string BuildProjectMemory(string goal, string finalAnswer) =>
+        $"Task: {Trim(SingleLine(goal), 220)}\nOutcome: {Trim(SingleLine(finalAnswer), 700)}";
 
     private static string SingleLine(string value) =>
-        value.Replace('\r', ' ').Replace('\n', ' ').Trim();
+        string.Join(' ', value.Split(default(string[]), StringSplitOptions.RemoveEmptyEntries));
 }

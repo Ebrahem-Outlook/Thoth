@@ -2,18 +2,25 @@
   "Thoth": {
     "WorkspaceRoot": ".",
     "DataDirectory": "data",
-    "MaxAgentSteps": 8,
+    "MaxAgentSteps": 12,
     "Model": {
-      "Provider": "self",
-      "Model": "thoth-self",
-      "Temperature": 0.2
+      "Provider": "hybrid",
+      "Model": "thoth-bootstrap",
+      "CheckpointPath": "data/models/thoth-bootstrap.bin",
+      "Temperature": 0.8,
+      "MaxNewTokens": 256,
+      "TopK": 40,
+      "EmbeddingSize": 64,
+      "HiddenSize": 128,
+      "SequenceLength": 128,
+      "Seed": 1337
     },
     "Sandbox": {
       "AllowFileWrites": true,
       "AllowShell": false,
       "ShellTimeoutSeconds": 20,
-      "AllowedShellExecutables": [ "dotnet", "git", "rg" ],
-      "BlockedCommandTokens": [ " rm ", " del ", " rmdir ", "format", "shutdown", "git reset", "git clean" ]
+      "AllowedShellExecutables": [ "dotnet", "git", "rg", "npm", "node" ],
+      "BlockedCommandTokens": [ " rm ", " del ", " rmdir ", "format", "shutdown", "git reset", "git clean", "--force", "> /dev/" ]
     }
   }
 }

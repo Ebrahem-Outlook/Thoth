@@ -247,6 +247,7 @@ public sealed class SelfContainedReasoningModel : IChatModel
         var backendWorkspaceTask = LooksLikeBackendWorkspaceTask(lower, message);
         var frontendTask = LooksLikeFrontendTask(lower);
         var architectureTask = LooksLikeArchitectureTask(lower);
+        var modelTask = LooksLikeModelTask(lower, message);
         var requiresTools = projectBound ||
                             backendWorkspaceTask ||
                             frontendTask ||
@@ -254,10 +255,11 @@ public sealed class SelfContainedReasoningModel : IChatModel
                             signal.RequiresTools && !(codeGeneration && !projectBound);
 
         var topic = codeGeneration && !requiresTools ? "coding" :
-            signal.Topic != "general" ? signal.Topic :
+            modelTask ? "model" :
             frontendTask ? "frontend" :
             backendWorkspaceTask || LooksLikeBackendTask(lower) && projectBound ? "backend" :
             architectureTask ? "architecture" :
+            signal.Topic != "general" ? signal.Topic :
             requiresTools ? "workspace" : "general";
 
         var payload = new
@@ -277,7 +279,12 @@ public sealed class SelfContainedReasoningModel : IChatModel
 
     private static string CreateFinalAnswer(string transcript)
     {
-        var goal = ExtractBetweenLabels(transcript, "Goal:", "Plan:");
+        var goalEndLabel = transcript.Contains("Plan:", StringComparison.OrdinalIgnoreCase)
+            ? "Plan:"
+            : transcript.Contains("Stop reason:", StringComparison.OrdinalIgnoreCase)
+                ? "Stop reason:"
+                : "Observations:";
+        var goal = ExtractBetweenLabels(transcript, "Goal:", goalEndLabel);
         var observations = ExtractBetweenLabels(transcript, "Observations:", "Write a direct");
         return LocalSemanticBrain.BuildFinalAnswer(goal, observations);
     }
@@ -554,6 +561,10 @@ public sealed class SelfContainedReasoningModel : IChatModel
 
     private static bool LooksLikeArchitectureTask(string lower) =>
         ContainsAny(lower, ArchitectureTerms);
+
+    private static bool LooksLikeModelTask(string lower, string text) =>
+        ContainsAny(lower, "model", "llm", "reason", "reasoning", "neural", "train", "brain", "think", "intelligence") ||
+        ContainsAny(text, "\u0645\u0648\u062f\u064a\u0644", "\u064a\u0641\u0643\u0631", "\u0630\u0643\u064a", "\u0639\u0642\u0644", "\u062a\u062f\u0631\u064a\u0628", "\u0639\u0635\u0628\u064a");
 
     private static bool LooksLikeGenericCodeGeneration(string lower, string text) =>
         ContainsAny(lower, CodeGenerationTerms) ||

@@ -27,6 +27,11 @@
     <ProjectReference Include="..\..\src\Thoth.Memory\Thoth.Memory.csproj" />
     <ProjectReference Include="..\..\src\Thoth.Sandbox\Thoth.Sandbox.csproj" />
     <ProjectReference Include="..\..\src\Thoth.Runtime\Thoth.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Thoth.Model\Thoth.Model.csproj" />
+    <ProjectReference Include="..\..\src\Thoth.Tokenization\Thoth.Tokenization.csproj" />
+    <ProjectReference Include="..\..\src\Thoth.Training\Thoth.Training.csproj" />
+    <ProjectReference Include="..\..\src\Thoth.Inference\Thoth.Inference.csproj" />
+    <ProjectReference Include="..\..\src\Thoth.Evaluation\Thoth.Evaluation.csproj" />
   </ItemGroup>
 
 </Project>

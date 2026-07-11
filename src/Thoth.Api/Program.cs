@@ -44,7 +44,7 @@ builder.Services.AddSwaggerGen(options =>
     {
         Title = "Thoth API",
         Version = "v1",
-        Description = "HTTP API for Thoth's self-contained agent runtime, conversations, memory, tools, attachments, and workspace inspection."
+        Description = "HTTP API for Thoth's local neural agent runtime, conversations, memory, tools, attachments, and workspace inspection."
     });
 });
 
@@ -88,7 +88,9 @@ app.MapGet("/api/client-config", (IOptions<ThothOptions> options) => Results.Ok(
         "tools",
         "streaming",
         "workspace_summary",
-        "self_reasoning"
+        "iterative_agent",
+        "neural_training",
+        "checkpoint_inference"
     }
 }));
 
@@ -103,7 +105,7 @@ app.MapGet("/api/system/status", async (
     var memoryCount = (await memory.RecentAsync(limit: 500, cancellationToken: cancellationToken)).Count;
 
     return Results.Ok(new SystemStatus(
-        "self-contained",
+        options.Value.Model.Provider,
         options.Value.Model.Model,
         true,
         options.Value.Sandbox.AllowShell,
