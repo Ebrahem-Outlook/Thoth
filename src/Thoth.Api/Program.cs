@@ -90,7 +90,10 @@ app.MapGet("/api/client-config", (IOptions<ThothOptions> options) => Results.Ok(
         "workspace_summary",
         "iterative_agent",
         "neural_training",
-        "checkpoint_inference"
+        "checkpoint_inference",
+        "web_search",
+        "web_read",
+        "web_research"
     }
 }));
 

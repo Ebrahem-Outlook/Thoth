@@ -217,4 +217,67 @@ public sealed class SelfContainedReasoningModelTests
         Assert.Equal("general", json.RootElement.GetProperty("topic").GetString());
         Assert.False(json.RootElement.GetProperty("requiresTools").GetBoolean());
     }
+
+    [Fact]
+    public async Task CompleteAsync_UnderstandingDetectsWebResearch()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.User, """
+                Classify the user's message.
+                User message:
+                search the web for LangGraph and summarize it
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        using var json = JsonDocument.Parse(response.Content);
+        Assert.Equal("research", json.RootElement.GetProperty("intent").GetString());
+        Assert.Equal("research", json.RootElement.GetProperty("topic").GetString());
+        Assert.True(json.RootElement.GetProperty("requiresTools").GetBoolean());
+    }
+
+    [Fact]
+    public async Task CompleteAsync_PlanningUsesWebResearchForExternalQuestions()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.User, """
+                Return a JSON plan only.
+                Goal:
+                search the web for open source ai agents and summarize them
+
+                Available tools:
+                - memory.search
+                - web.research
+                - workspace.summary
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        Assert.Contains("web.research", response.Content);
+        Assert.DoesNotContain("workspace.summary", response.Content);
+        Assert.DoesNotContain("workspace.map", response.Content);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_GenericArabicMethodReplyDoesNotContainMojibake()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [new ChatMessage(ChatRole.User, "\u0639\u0627\u064a\u0632\u0643 \u062a\u0639\u0645\u0644\u064a meethod in C#")],
+            "thoth-self",
+            0));
+
+        Assert.Contains("\u0623\u0643\u064a\u062f", response.Content);
+        Assert.DoesNotContain("Ø", response.Content);
+        Assert.DoesNotContain("Ù", response.Content);
+    }
 }

@@ -19,6 +19,8 @@ internal static class LocalSemanticBrain
         new("frontend", "\u0641\u0631\u0648\u0646\u062a \u0648\u0627\u062c\u0647\u0629 \u0627\u0646\u062c\u0644\u0648\u0631 ui"),
         new("model", "model llm reasoning brain neural think intelligence train understand planner embeddings semantic agent cognition"),
         new("model", "\u0645\u0648\u062f\u064a\u0644 \u064a\u0641\u0643\u0631 \u0639\u0642\u0644 \u0630\u0643\u064a \u062a\u062f\u0631\u064a\u0628 \u0639\u0635\u0628\u064a \u064a\u0641\u0647\u0645"),
+        new("research", "web internet online google search latest current news price weather external source cite summarize"),
+        new("research", "\u0627\u0628\u062d\u062b \u0628\u062d\u062b \u062f\u0648\u0631 \u0627\u0644\u0646\u062a \u062c\u0648\u062c\u0644 \u0648\u064a\u0628 \u0627\u062e\u0628\u0627\u0631 \u0627\u062d\u062f\u062b \u0644\u062e\u0635 \u0645\u0635\u0627\u062f\u0631"),
         new("architecture", "architecture roadmap design system pipeline module runtime memory sandbox tools architecture"),
         new("debugging", "bug broken error failing not working weak crash exception returns nothing issue problem fix"),
         new("debugging", "\u0645\u0634\u0643\u0644\u0629 \u0628\u0627\u064a\u0638 \u0639\u0637\u0644\u0627\u0646 \u0636\u0639\u064a\u0641 \u0645\u0628\u064a\u0631\u062f\u0634 \u0645\u0628\u064a\u0641\u0643\u0631\u0634"),
@@ -33,8 +35,69 @@ internal static class LocalSemanticBrain
         new("fix", "fix repair improve enhance debug solve broken issue weak"),
         new("train", "train learn neural model intelligence brain embeddings patterns corpus"),
         new("test", "test verify validate build smoke check coverage"),
+        new("search", "search research look up browse read sources summarize cite"),
+        new("search", "\u0627\u0628\u062d\u062b \u0628\u062d\u062b \u062f\u0648\u0631 \u0627\u0644\u0646\u062a \u0644\u062e\u0635 \u0645\u0635\u0627\u062f\u0631"),
         new("chat", "hello hi question answer talk")
     ]);
+
+    private static readonly string[] ResearchTerms =
+    [
+        "web",
+        "internet",
+        "online",
+        "google",
+        "search the web",
+        "web search",
+        "look up",
+        "lookup",
+        "research",
+        "latest",
+        "current",
+        "today",
+        "news",
+        "price",
+        "weather",
+        "\u0627\u0628\u062d\u062b",
+        "\u0628\u062d\u062b",
+        "\u062f\u0648\u0631",
+        "\u0627\u0644\u0646\u062a",
+        "\u062c\u0648\u062c\u0644",
+        "\u0648\u064a\u0628",
+        "\u0623\u062e\u0628\u0627\u0631",
+        "\u0627\u062e\u0628\u0627\u0631",
+        "\u0622\u062e\u0631",
+        "\u0627\u062d\u062f\u062b",
+        "\u0623\u062d\u062f\u062b",
+        "\u062d\u0627\u0644\u064a",
+        "\u0633\u0639\u0631",
+        "\u0644\u062e\u0635"
+    ];
+
+    private static readonly string[] LocalSearchScopeTerms =
+    [
+        "workspace",
+        "repo",
+        "repository",
+        "codebase",
+        "project",
+        "file",
+        "src/",
+        "tests/",
+        ".cs",
+        ".ts",
+        ".html",
+        ".scss",
+        ".json",
+        ".md",
+        "\u0627\u0644\u0645\u0634\u0631\u0648\u0639",
+        "\u0645\u0634\u0631\u0648\u0639",
+        "\u0627\u0644\u0645\u0644\u0641",
+        "\u0645\u0644\u0641",
+        "\u0627\u0644\u0631\u064a\u0628\u0648",
+        "\u0631\u064a\u0628\u0648",
+        "\u0627\u0644\u0643\u0648\u062f",
+        "\u0643\u0648\u062f"
+    ];
 
     public static BrainSignal AnalyzeGoal(string goal)
     {
@@ -43,7 +106,8 @@ internal static class LocalSemanticBrain
         var language = HasArabic(text) ? "ar" : "en";
         var keywords = ExtractKeywords(text, 8);
         var codeGeneration = LooksLikeGenericCodeGeneration(lower, text);
-        var projectBound = LooksLikeProjectBoundTask(lower, text);
+        var researchTask = LooksLikeResearchTask(lower, text);
+        var projectBound = !researchTask && LooksLikeProjectBoundTask(lower, text);
 
         if (IsCasualChat(lower, text))
         {
@@ -56,7 +120,16 @@ internal static class LocalSemanticBrain
         topic = OverrideTopic(lower, topic);
         action = OverrideAction(lower, action);
 
-        if (codeGeneration && !projectBound)
+        if (researchTask)
+        {
+            topic = "research";
+            if (action == "chat")
+            {
+                action = "search";
+            }
+        }
+
+        if (codeGeneration && !projectBound && !researchTask)
         {
             topic = "coding";
             if (action == "chat")
@@ -74,8 +147,12 @@ internal static class LocalSemanticBrain
 
         var requiresTools = explicitToolSignal &&
                             (topic is not "general" ||
-                              action is "inspect" or "build" or "fix" or "train" or "test");
-        if (codeGeneration && !projectBound)
+                              action is "inspect" or "build" or "fix" or "train" or "test" or "search");
+        if (researchTask)
+        {
+            requiresTools = true;
+        }
+        if (codeGeneration && !projectBound && !researchTask)
         {
             requiresTools = false;
         }
@@ -123,9 +200,13 @@ internal static class LocalSemanticBrain
         var insights = AnalyzeObservations(goal, observations);
         var builder = new StringBuilder();
 
-        builder.AppendLine(signal.Language == "ar"
-            ? "\u0641\u0627\u0647\u0645\u0643. \u0643\u0633\u0631\u062a \u0627\u0644\u0637\u0644\u0628 \u0644\u062a\u0635\u0646\u064a\u0641 \u0645\u062d\u0644\u064a\u060c \u0648\u0641\u062d\u0635\u062a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0648\u0627\u0644\u0623\u062f\u0648\u0627\u062a \u0642\u0628\u0644 \u0645\u0627 \u0623\u0631\u062f."
-            : "I broke the request down locally, checked the workspace evidence, and then formed the answer.");
+        builder.AppendLine(signal.Topic == "research"
+            ? signal.Language == "ar"
+                ? "\u0641\u0627\u0647\u0645\u0643. \u0643\u0633\u0631\u062a \u0627\u0644\u0637\u0644\u0628\u060c \u0628\u062d\u062b\u062a \u0639\u0644\u0649 \u0627\u0644\u0648\u064a\u0628\u060c \u0648\u0642\u0631\u0623\u062a \u0627\u0644\u0645\u0635\u0627\u062f\u0631 \u0642\u0628\u0644 \u0627\u0644\u0645\u0644\u062e\u0635."
+                : "I broke the request down, searched the web, read sources, and then formed the answer."
+            : signal.Language == "ar"
+                ? "\u0641\u0627\u0647\u0645\u0643. \u0643\u0633\u0631\u062a \u0627\u0644\u0637\u0644\u0628 \u0644\u062a\u0635\u0646\u064a\u0641 \u0645\u062d\u0644\u064a\u060c \u0648\u0641\u062d\u0635\u062a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0648\u0627\u0644\u0623\u062f\u0648\u0627\u062a \u0642\u0628\u0644 \u0645\u0627 \u0623\u0631\u062f."
+                : "I broke the request down locally, checked the workspace evidence, and then formed the answer.");
         builder.AppendLine();
         AppendUnderstanding(builder, signal);
 
@@ -154,7 +235,7 @@ internal static class LocalSemanticBrain
         {
             if (signal.Topic == "coding")
             {
-                return BuildGenericCodeReply(signal.Language == "ar");
+                return BuildCleanGenericCodeReply(signal.Language == "ar");
             }
 
             return signal.Language == "ar"
@@ -164,11 +245,15 @@ internal static class LocalSemanticBrain
 
         if (signal.Language == "ar")
         {
-            builder.AppendLine("\u0641\u0627\u0647\u0645\u0643. \u062f\u0647 \u0628\u0627\u064a\u0646 \u0637\u0644\u0628 \u0639\u0644\u0649 \u0627\u0644\u0645\u0634\u0631\u0648\u0639\u060c \u0641\u0627\u0644\u0635\u062d \u0625\u0646\u064a \u0623\u0641\u062d\u0635 \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0648\u0627\u0644\u0623\u062f\u0648\u0627\u062a \u0642\u0628\u0644 \u0627\u0644\u0631\u062f.");
+            builder.AppendLine(signal.Topic == "research"
+                ? "\u0641\u0627\u0647\u0645\u0643. \u062f\u0647 \u0637\u0644\u0628 \u0628\u062d\u062b \u0639\u0644\u0649 \u0627\u0644\u0648\u064a\u0628\u060c \u0641\u0627\u0644\u0635\u062d \u0625\u0646\u064a \u0623\u0634\u063a\u0644 \u0623\u062f\u0627\u0629 \u0627\u0644\u0628\u062d\u062b \u0648\u0623\u0642\u0631\u0623 \u0645\u0635\u0627\u062f\u0631 \u0642\u0628\u0644 \u0645\u0627 \u0623\u0644\u062e\u0635."
+                : "\u0641\u0627\u0647\u0645\u0643. \u062f\u0647 \u0628\u0627\u064a\u0646 \u0637\u0644\u0628 \u0639\u0644\u0649 \u0627\u0644\u0645\u0634\u0631\u0648\u0639\u060c \u0641\u0627\u0644\u0635\u062d \u0625\u0646\u064a \u0623\u0641\u062d\u0635 \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0648\u0627\u0644\u0623\u062f\u0648\u0627\u062a \u0642\u0628\u0644 \u0627\u0644\u0631\u062f.");
         }
         else
         {
-            builder.AppendLine("I understand the request. This looks project-related, so I should inspect local files and tool output before answering.");
+            builder.AppendLine(signal.Topic == "research"
+                ? "I understand the request. This needs web research, so I should search, read sources, and cite URLs before answering."
+                : "I understand the request. This looks project-related, so I should inspect local files and tool output before answering.");
         }
 
         builder.AppendLine();
@@ -180,11 +265,57 @@ internal static class LocalSemanticBrain
         }
 
         builder.AppendLine(signal.Language == "ar"
-            ? "\u0627\u0641\u062a\u062d Tools \u0648\u0627\u062f\u064a\u0646\u064a \u0647\u062f\u0641 \u0645\u062d\u062f\u062f\u060c \u0648\u0647\u062d\u0648\u0644\u0647 \u0644\u062e\u0637\u0629 \u0648\u062a\u0646\u0641\u064a\u0630."
-            : "Keep Tools enabled and give me the concrete target; I will turn it into an inspect-plan-answer loop.");
+            ? signal.Topic == "research"
+                ? "\u0627\u0641\u062a\u062d Tools \u0648\u0647\u0627\u062f\u0648\u0631 \u0639\u0644\u0649 \u0627\u0644\u0648\u064a\u0628 \u0648\u0623\u0631\u062c\u0639\u0644\u0643 \u0628\u0645\u0644\u062e\u0635 \u0648\u0645\u0635\u0627\u062f\u0631."
+                : "\u0627\u0641\u062a\u062d Tools \u0648\u0627\u062f\u064a\u0646\u064a \u0647\u062f\u0641 \u0645\u062d\u062f\u062f\u060c \u0648\u0647\u062d\u0648\u0644\u0647 \u0644\u062e\u0637\u0629 \u0648\u062a\u0646\u0641\u064a\u0630."
+            : signal.Topic == "research"
+                ? "Keep Tools enabled and I will search the web, read sources, and return a sourced summary."
+                : "Keep Tools enabled and give me the concrete target; I will turn it into an inspect-plan-answer loop.");
 
         return builder.ToString().Trim();
     }
+
+    private static string BuildCleanGenericCodeReply(bool arabic) =>
+        arabic
+            ? string.Join(Environment.NewLine,
+                "\u0623\u0643\u064a\u062f. \u0628\u0633 \u0627\u0644\u0637\u0644\u0628 \u0646\u0627\u0642\u0635 \u0623\u0647\u0645 \u062c\u0632\u0621: \u0627\u0644\u0645\u064a\u062b\u0648\u062f \u062a\u0639\u0645\u0644 \u0625\u064a\u0647 \u0628\u0627\u0644\u0636\u0628\u0637\u061f \u0644\u062d\u062f \u0645\u0627 \u062a\u062d\u062f\u062f \u0627\u0644\u0645\u0637\u0644\u0648\u0628\u060c \u062f\u0647 \u0642\u0627\u0644\u0628 C# \u0646\u0638\u064a\u0641 \u062a\u0642\u062f\u0631 \u062a\u0628\u0646\u064a \u0639\u0644\u064a\u0647:",
+                "",
+                "```csharp",
+                "public static bool TryNormalizeName(string? value, out string normalized)",
+                "{",
+                "    normalized = string.Empty;",
+                "",
+                "    if (string.IsNullOrWhiteSpace(value))",
+                "    {",
+                "        return false;",
+                "    }",
+                "",
+                "    normalized = value.Trim();",
+                "    return true;",
+                "}",
+                "```",
+                "",
+                "\u0627\u0628\u0639\u062a\u0644\u064a \u0627\u0633\u0645 \u0627\u0644\u0645\u064a\u062b\u0648\u062f\u060c \u0627\u0644\u0645\u062f\u062e\u0644\u0627\u062a\u060c \u0627\u0644\u0646\u0627\u062a\u062c \u0627\u0644\u0645\u062a\u0648\u0642\u0639\u060c \u0648\u0642\u0648\u0627\u0639\u062f \u0627\u0644\u0640 validation\u060c \u0648\u0623\u0646\u0627 \u0623\u0637\u0644\u0639\u0647\u0627 \u062c\u0627\u0647\u0632\u0629 \u0639\u0644\u0649 \u0627\u0644\u0645\u0637\u0644\u0648\u0628.")
+            : """
+              Sure. I need the method's purpose before I can write the exact version. Here is a clean C# template you can build from:
+
+              ```csharp
+              public static bool TryNormalizeName(string? value, out string normalized)
+              {
+                  normalized = string.Empty;
+
+                  if (string.IsNullOrWhiteSpace(value))
+                  {
+                      return false;
+                  }
+
+                  normalized = value.Trim();
+                  return true;
+              }
+              ```
+
+              Send me the method name, inputs, expected return value, and validation rules, and I will write the final method.
+              """;
 
     private static string BuildGenericCodeReply(bool arabic) =>
         arabic
@@ -267,6 +398,10 @@ internal static class LocalSemanticBrain
             AppendIfAny(builder, "Relevant model symbols", insights.Symbols.Where(symbol =>
                 ContainsAny(symbol, "Model", "Engine", "Planner", "Understanding", "Orchestrator")));
         }
+        else if (signal.Topic == "research")
+        {
+            AppendIfAny(builder, "Web evidence", insights.Evidence);
+        }
         else if (signal.Topic == "frontend")
         {
             AppendIfAny(builder, "Relevant UI files", insights.Files.Where(file =>
@@ -324,7 +459,9 @@ internal static class LocalSemanticBrain
         }
 
         builder.AppendLine();
-        builder.AppendLine(signal.Language == "ar" ? "\u0641\u062d\u0635\u062a \u0645\u062d\u0644\u064a\u0627:" : "Checked locally:");
+        builder.AppendLine(signal.Topic == "research"
+            ? signal.Language == "ar" ? "\u0627\u0633\u062a\u062e\u062f\u0645\u062a \u0623\u062f\u0648\u0627\u062a:" : "Checked with tools:"
+            : signal.Language == "ar" ? "\u0641\u062d\u0635\u062a \u0645\u062d\u0644\u064a\u0627:" : "Checked locally:");
         builder.AppendLine($"- {string.Join(", ", insights.ToolNames.Take(8))}");
     }
 
@@ -338,6 +475,7 @@ internal static class LocalSemanticBrain
             "backend" => "Use the route map to pick one endpoint, inspect its request/response contract, then add a focused test.",
             "frontend" => "Inspect the Angular component state and template around the target workflow, then validate it in the browser.",
             "model" => "Train/update the local pattern bank with workspace examples and add regression tests for answer quality.",
+            "research" => "Read one more high-signal source if the evidence conflicts, then cite the final source list.",
             "debugging" when insights.Failures.Count > 0 => "Start from the first failure above, reproduce it, and patch the responsible file.",
             "testing" => "Run the smallest failing test/build command, then expand coverage only around the changed behavior.",
             _ => "Give me a narrower build/fix/review target and I will route it through local tools."
@@ -563,6 +701,11 @@ internal static class LocalSemanticBrain
 
     private static string OverrideTopic(string lower, string topic)
     {
+        if (LooksLikeResearchTask(lower, lower))
+        {
+            return "research";
+        }
+
         if (ContainsAny(lower, "model", "llm", "reason", "reasoning", "neural", "train", "brain", "think", "intelligence") ||
             ContainsAny(lower, "\u0645\u0648\u062f\u064a\u0644", "\u064a\u0641\u0643\u0631", "\u0630\u0643\u064a", "\u0639\u0642\u0644", "\u062a\u062f\u0631\u064a\u0628", "\u0639\u0635\u0628\u064a"))
         {
@@ -589,6 +732,11 @@ internal static class LocalSemanticBrain
 
     private static string OverrideAction(string lower, string action)
     {
+        if (LooksLikeResearchTask(lower, lower))
+        {
+            return "search";
+        }
+
         if (ContainsAny(lower, "fix", "bug", "broken", "issue", "weak", "improve", "enhance") ||
             ContainsAny(lower, "\u062d\u0633\u0646", "\u0645\u0634\u0643\u0644\u0629", "\u0636\u0639\u064a\u0641", "\u0639\u0637\u0644\u0627\u0646"))
         {
@@ -625,7 +773,16 @@ internal static class LocalSemanticBrain
         ContainsAny(text, "\u0645\u0634\u0631\u0648\u0639", "\u0645\u0644\u0641", "\u0628\u0627\u0643", "\u0641\u0631\u0648\u0646\u062a", "\u0648\u0627\u062c\u0647\u0629", "\u0645\u0648\u062f\u064a\u0644", "\u062a\u062f\u0631\u064a\u0628", "\u0639\u0635\u0628\u064a", "\u0641\u064a \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u062f\u0627\u062e\u0644 \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u0641\u064a \u0627\u0644\u0645\u0644\u0641");
 
     private static bool HasExplicitToolSignal(string lower, string text) =>
-        LooksLikeProjectBoundTask(lower, text);
+        LooksLikeProjectBoundTask(lower, text) ||
+        LooksLikeResearchTask(lower, text);
+
+    private static bool LooksLikeResearchTask(string lower, string text) =>
+        ContainsAny(lower, ResearchTerms) &&
+        !LooksLikeLocalSearchScope(lower, text);
+
+    private static bool LooksLikeLocalSearchScope(string lower, string text) =>
+        ContainsAny(lower, LocalSearchScopeTerms) ||
+        ContainsAny(text, "\u062c\u0648\u0647 \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u062f\u0627\u062e\u0644 \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u0641\u064a \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u0641\u064a \u0627\u0644\u0645\u0644\u0641");
 
     private static bool IsCasualChat(string lower, string text)
     {

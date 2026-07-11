@@ -101,6 +101,7 @@ public sealed class ModelAgentDecisionService(
 
         builder.AppendLine();
         builder.AppendLine("Rules: inspect before editing; do not repeat the same failed call; verify writes; finish only when evidence supports the answer.");
+        builder.AppendLine("For public web/current/latest/news/price/weather/research questions, call web.research first when available; otherwise use web.search then web.read. Include source URLs in the final answer.");
         return builder.ToString();
     }
 

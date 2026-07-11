@@ -101,4 +101,32 @@ public sealed class HeuristicUnderstandingServiceTests
         Assert.Equal("backend", result.Topic);
         Assert.True(result.RequiresTools);
     }
+
+    [Theory]
+    [InlineData("search the web for LangGraph and summarize it")]
+    [InlineData("\u062f\u0648\u0631 \u0639\u0644\u0649 LangGraph \u0639\u0644\u0649 \u0627\u0644\u0646\u062a \u0648\u0644\u062e\u0635\u0647")]
+    public async Task UnderstandAsync_RoutesWebResearchToResearchTools(string text)
+    {
+        var service = new HeuristicUnderstandingService();
+
+        var result = await service.UnderstandAsync(new UnderstandingRequest(text, []));
+
+        Assert.Equal("research", result.Intent);
+        Assert.Equal("research", result.Topic);
+        Assert.True(result.RequiresTools);
+    }
+
+    [Fact]
+    public async Task UnderstandAsync_KeepsRepositorySearchLocal()
+    {
+        var service = new HeuristicUnderstandingService();
+
+        var result = await service.UnderstandAsync(new UnderstandingRequest(
+            "search the repo for Program.cs",
+            []));
+
+        Assert.Equal("workspace_task", result.Intent);
+        Assert.NotEqual("research", result.Topic);
+        Assert.True(result.RequiresTools);
+    }
 }

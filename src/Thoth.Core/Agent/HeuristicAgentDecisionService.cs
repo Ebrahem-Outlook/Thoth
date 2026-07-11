@@ -19,6 +19,44 @@ public sealed class HeuristicAgentDecisionService : IAgentDecisionService
             .Select(step => step.Invocation!.ToolName)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
+        if (NeedsWebResearch(context.Request.Goal))
+        {
+            if (HasTool(context, "web.research") && !usedTools.Contains("web.research"))
+            {
+                return Use("Search the public web, read top sources, and summarize before answering.", "web.research", new()
+                {
+                    ["query"] = ExtractResearchQuery(context.Request.Goal),
+                    ["maxResults"] = "8",
+                    ["maxPages"] = "3"
+                });
+            }
+
+            if (HasTool(context, "web.search") && !usedTools.Contains("web.search"))
+            {
+                return Use("Search the public web before answering this current/external question.", "web.search", new()
+                {
+                    ["query"] = ExtractResearchQuery(context.Request.Goal),
+                    ["maxResults"] = "8"
+                });
+            }
+
+            var searchResult = context.Steps.LastOrDefault(step =>
+                string.Equals(step.Invocation?.ToolName, "web.search", StringComparison.OrdinalIgnoreCase) &&
+                step.Result?.Succeeded == true);
+            var url = searchResult is null ? null : ExtractFirstUrl(searchResult.Result!.Content);
+            if (!string.IsNullOrWhiteSpace(url) &&
+                HasTool(context, "web.read") &&
+                !WasWebRead(context, url))
+            {
+                return Use("Read the strongest web search result and extract a focused summary.", "web.read", new()
+                {
+                    ["url"] = url,
+                    ["query"] = ExtractResearchQuery(context.Request.Goal),
+                    ["summarySentences"] = "5"
+                });
+            }
+        }
+
         if (HasTool(context, "workspace.summary") && !usedTools.Contains("workspace.summary"))
         {
             return Use("Inspect the workspace shape before selecting files.", "workspace.summary");
@@ -89,6 +127,12 @@ public sealed class HeuristicAgentDecisionService : IAgentDecisionService
             string.Equals(step.Invocation.ToolName, "file.read", StringComparison.OrdinalIgnoreCase) &&
             string.Equals(step.Invocation.GetString("path"), path, StringComparison.OrdinalIgnoreCase));
 
+    private static bool WasWebRead(AgentDecisionContext context, string url) =>
+        context.Steps.Any(step =>
+            step.Invocation is not null &&
+            string.Equals(step.Invocation.ToolName, "web.read", StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(step.Invocation.GetString("url"), url, StringComparison.OrdinalIgnoreCase));
+
     private static string? ExtractPath(string goal)
     {
         var match = Regex.Match(
@@ -113,6 +157,12 @@ public sealed class HeuristicAgentDecisionService : IAgentDecisionService
         return null;
     }
 
+    private static string? ExtractFirstUrl(string content)
+    {
+        var match = Regex.Match(content, @"https?://[^\s)>\]""]+", RegexOptions.IgnoreCase);
+        return match.Success ? match.Value.TrimEnd('.', ',', ';') : null;
+    }
+
     private static string ExtractSearchTerm(string goal)
     {
         var words = Regex.Matches(goal, @"[\p{L}\p{N}_-]{3,}")
@@ -123,9 +173,89 @@ public sealed class HeuristicAgentDecisionService : IAgentDecisionService
         return words.FirstOrDefault() ?? goal.Trim();
     }
 
+    private static string ExtractResearchQuery(string goal)
+    {
+        var cleaned = goal.Trim();
+        cleaned = Regex.Replace(cleaned, @"\b(search|look\s*up|lookup|research|summarize|summary|web|internet|online|google|latest|current)\b", " ", RegexOptions.IgnoreCase);
+        cleaned = Regex.Replace(cleaned, @"\b(the|for|and|it|them|about|please|on)\b", " ", RegexOptions.IgnoreCase);
+        cleaned = Regex.Replace(cleaned, "(\u0627\u0628\u062d\u062b|\u0628\u062d\u062b|\u062f\u0648\u0631|\u0627\u0644\u0646\u062a|\u062c\u0648\u062c\u0644|\u0648\u064a\u0628|\u0644\u062e\u0635|\u0645\u0644\u062e\u0635|\u0627\u062d\u062f\u062b|\u0623\u062d\u062f\u062b|\u0627\u062e\u0631|\u0622\u062e\u0631|\u062d\u0627\u0644\u064a|\u0627\u062e\u0628\u0627\u0631|\u0623\u062e\u0628\u0627\u0631)", " ", RegexOptions.IgnoreCase);
+        cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
+        return string.IsNullOrWhiteSpace(cleaned) ? goal.Trim() : cleaned;
+    }
+
+    private static bool NeedsWebResearch(string goal)
+    {
+        var lower = goal.ToLowerInvariant();
+        if (LooksLikeLocalSearchScope(lower, goal))
+        {
+            return false;
+        }
+
+        return ContainsAny(lower,
+                   "search the web",
+                   "web search",
+                   "internet",
+                   "online",
+                   "google",
+                   "look up",
+                   "lookup",
+                   "research",
+                   "latest",
+                   "current",
+                   "today",
+                   "news",
+                   "price",
+                   "weather") ||
+               ContainsAny(goal,
+                   "\u0627\u0628\u062d\u062b",
+                   "\u0628\u062d\u062b",
+                   "\u062f\u0648\u0631",
+                   "\u0627\u0644\u0646\u062a",
+                   "\u062c\u0648\u062c\u0644",
+                   "\u0648\u064a\u0628",
+                   "\u0622\u062e\u0631",
+                   "\u0627\u062d\u062f\u062b",
+                   "\u0623\u062d\u062f\u062b",
+                   "\u0623\u062e\u0628\u0627\u0631",
+                   "\u0627\u062e\u0628\u0627\u0631",
+                   "\u0633\u0639\u0631",
+                   "\u0644\u062e\u0635");
+    }
+
+    private static bool LooksLikeLocalSearchScope(string lower, string text) =>
+        ContainsAny(lower,
+            "workspace",
+            "repo",
+            "repository",
+            "codebase",
+            "project",
+            "file",
+            "src/",
+            "tests/",
+            ".cs",
+            ".ts",
+            ".html",
+            ".scss",
+            ".json",
+            ".md") ||
+        ContainsAny(text,
+            "\u0627\u0644\u0645\u0634\u0631\u0648\u0639",
+            "\u0645\u0634\u0631\u0648\u0639",
+            "\u0627\u0644\u0645\u0644\u0641",
+            "\u0645\u0644\u0641",
+            "\u0627\u0644\u0631\u064a\u0628\u0648",
+            "\u0631\u064a\u0628\u0648",
+            "\u0627\u0644\u0643\u0648\u062f",
+            "\u0643\u0648\u062f");
+
+    private static bool ContainsAny(string value, params string[] terms) =>
+        terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+
     private static readonly HashSet<string> StopWords = new(StringComparer.OrdinalIgnoreCase)
     {
         "this", "that", "with", "from", "project", "workspace", "file", "please",
-        "\u0639\u0627\u064a\u0632", "\u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u0627\u0644\u0645\u0644\u0641", "\u0627\u0639\u0645\u0644", "\u0628\u0635", "\u0639\u0644\u0649", "\u0645\u0646", "\u0641\u064a"
+        "search", "web", "internet", "online", "google", "lookup", "research", "summarize",
+        "\u0639\u0627\u064a\u0632", "\u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u0627\u0644\u0645\u0644\u0641", "\u0627\u0639\u0645\u0644", "\u0628\u0635", "\u0639\u0644\u0649", "\u0645\u0646", "\u0641\u064a",
+        "\u0627\u0628\u062d\u062b", "\u0628\u062d\u062b", "\u062f\u0648\u0631", "\u0627\u0644\u0646\u062a", "\u0644\u062e\u0635"
     };
 }

@@ -114,6 +114,64 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "\u0639\u0635\u0628\u064a"
     ];
 
+    private static readonly string[] ResearchTerms =
+    [
+        "web",
+        "internet",
+        "online",
+        "google",
+        "search the web",
+        "look up",
+        "lookup",
+        "research",
+        "latest",
+        "current",
+        "today",
+        "news",
+        "price",
+        "weather",
+        "summarize online",
+        "\u0627\u0628\u062d\u062b",
+        "\u0628\u062d\u062b",
+        "\u062f\u0648\u0631",
+        "\u0627\u0644\u0646\u062a",
+        "\u062c\u0648\u062c\u0644",
+        "\u0648\u064a\u0628",
+        "\u0623\u062e\u0628\u0627\u0631",
+        "\u0627\u062e\u0628\u0627\u0631",
+        "\u0622\u062e\u0631",
+        "\u0627\u062d\u062f\u062b",
+        "\u062d\u0627\u0644\u064a",
+        "\u0633\u0639\u0631",
+        "\u0644\u062e\u0635"
+    ];
+
+    private static readonly string[] LocalSearchScopeTerms =
+    [
+        "workspace",
+        "repo",
+        "repository",
+        "codebase",
+        "project",
+        "file",
+        "src/",
+        "tests/",
+        ".cs",
+        ".ts",
+        ".html",
+        ".scss",
+        ".json",
+        ".md",
+        "\u0627\u0644\u0645\u0634\u0631\u0648\u0639",
+        "\u0645\u0634\u0631\u0648\u0639",
+        "\u0627\u0644\u0645\u0644\u0641",
+        "\u0645\u0644\u0641",
+        "\u0627\u0644\u0631\u064a\u0628\u0648",
+        "\u0631\u064a\u0628\u0648",
+        "\u0627\u0644\u0643\u0648\u062f",
+        "\u0643\u0648\u062f"
+    ];
+
     public Task<UnderstandingResult> UnderstandAsync(
         UnderstandingRequest request,
         CancellationToken cancellationToken = default)
@@ -135,11 +193,12 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         }
 
         var codeGeneration = LooksLikeCodeGenerationTask(lower, text);
-        var projectBound = LooksLikeProjectTask(lower, text) || LooksLikeFileTask(lower) || LooksLikeCommandTask(lower);
-        var requiresTools = projectBound;
-        var intent = requiresTools ? "workspace_task" : requiresVision ? "vision_chat" : codeGeneration ? "code_generation" : "general_chat";
-        var topic = codeGeneration && !requiresTools ? "coding" : InferTopic(lower, request.AttachmentContentTypes);
-        var confidence = requiresTools || requiresVision ? 0.78 : 0.6;
+        var research = LooksLikeResearchTask(lower, text);
+        var projectBound = !research && (LooksLikeProjectTask(lower, text) || LooksLikeFileTask(lower) || LooksLikeCommandTask(lower));
+        var requiresTools = research || projectBound;
+        var intent = research ? "research" : requiresTools ? "workspace_task" : requiresVision ? "vision_chat" : codeGeneration ? "code_generation" : "general_chat";
+        var topic = research ? "research" : codeGeneration && !requiresTools ? "coding" : InferTopic(lower, request.AttachmentContentTypes);
+        var confidence = research ? 0.86 : requiresTools || requiresVision ? 0.78 : 0.6;
 
         return Task.FromResult(new UnderstandingResult(
             intent,
@@ -172,6 +231,14 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         text.StartsWith("run ", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("dotnet ", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("npm ", StringComparison.OrdinalIgnoreCase);
+
+    private static bool LooksLikeResearchTask(string lower, string text) =>
+        ContainsAny(lower, ResearchTerms) &&
+        !LooksLikeLocalSearchScope(lower, text);
+
+    private static bool LooksLikeLocalSearchScope(string lower, string text) =>
+        ContainsAny(lower, LocalSearchScopeTerms) ||
+        ContainsAny(text, "\u062c\u0648\u0647 \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u062f\u0627\u062e\u0644 \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u0641\u064a \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u0641\u064a \u0627\u0644\u0645\u0644\u0641");
 
     private static string InferTopic(string text, IReadOnlyList<string> contentTypes)
     {

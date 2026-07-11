@@ -3,6 +3,7 @@ using Thoth.Tools.FileSystem;
 using Thoth.Tools.Http;
 using Thoth.Tools.Memory;
 using Thoth.Tools.Shell;
+using Thoth.Tools.Web;
 
 namespace Thoth.Tools;
 
@@ -10,6 +11,11 @@ public static class DefaultToolSet
 {
     public static ToolRegistry Create(TimeSpan shellTimeout)
     {
+        var httpClient = new HttpClient
+        {
+            Timeout = TimeSpan.FromSeconds(20)
+        };
+
         return new ToolRegistry()
             .Register(new WorkspaceSummaryTool())
             .Register(new WorkspaceMapTool())
@@ -22,7 +28,10 @@ public static class DefaultToolSet
             .Register(new MemorySearchTool())
             .Register(new MemoryRecentTool())
             .Register(new MemoryWriteTool())
-            .Register(new HttpGetTool(new HttpClient()))
+            .Register(new WebSearchTool(httpClient))
+            .Register(new WebReadTool(httpClient))
+            .Register(new WebResearchTool(httpClient))
+            .Register(new HttpGetTool(httpClient))
             .Register(new ShellRunTool(shellTimeout));
     }
 }

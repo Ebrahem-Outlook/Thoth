@@ -40,4 +40,39 @@ public sealed class PolicyTests
 
         Assert.False(decision.Allowed);
     }
+
+    [Theory]
+    [InlineData("web.search")]
+    [InlineData("web.read")]
+    [InlineData("web.research")]
+    public void Authorize_AllowsWebTools(string toolName)
+    {
+        var workspace = Path.Combine(Path.GetTempPath(), "thoth-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+
+        var policy = new LocalExecutionPolicy(new SandboxOptions());
+        var context = new ToolContext(workspace, new InMemoryMemoryStore(), policy);
+        var invocation = new ToolInvocation(toolName, new Dictionary<string, string?>());
+
+        var decision = policy.Authorize(invocation, context);
+
+        Assert.True(decision.Allowed, decision.Reason);
+    }
+
+    [Fact]
+    public void Authorize_AllowsFilePatchInsideWorkspaceWhenWritesEnabled()
+    {
+        var workspace = Path.Combine(Path.GetTempPath(), "thoth-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workspace);
+
+        var policy = new LocalExecutionPolicy(new SandboxOptions { AllowFileWrites = true });
+        var context = new ToolContext(workspace, new InMemoryMemoryStore(), policy);
+        var invocation = new ToolInvocation(
+            "file.patch",
+            new Dictionary<string, string?> { ["path"] = "src/test.txt", ["patch"] = "content" });
+
+        var decision = policy.Authorize(invocation, context);
+
+        Assert.True(decision.Allowed, decision.Reason);
+    }
 }

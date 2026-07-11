@@ -15,6 +15,9 @@ public sealed class LocalExecutionPolicy(SandboxOptions options) : IExecutionPol
         "file.info",
         "file.search",
         "http.get",
+        "web.search",
+        "web.read",
+        "web.research",
         "memory.search",
         "memory.recent",
         "memory.write"
@@ -27,7 +30,8 @@ public sealed class LocalExecutionPolicy(SandboxOptions options) : IExecutionPol
             return PolicyDecision.Allow();
         }
 
-        if (invocation.ToolName.Equals("file.write", StringComparison.OrdinalIgnoreCase))
+        if (invocation.ToolName.Equals("file.write", StringComparison.OrdinalIgnoreCase) ||
+            invocation.ToolName.Equals("file.patch", StringComparison.OrdinalIgnoreCase))
         {
             if (!options.AllowFileWrites)
             {
