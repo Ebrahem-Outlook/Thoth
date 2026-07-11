@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Thoth.Core.Chat;
 using Thoth.Llm.Models;
 
@@ -50,6 +51,7 @@ public sealed class SelfContainedReasoningModelTests
                 Observations:
                 Tool: file.read
                 Succeeded: True
+                Return a JSON plan only. Do not include markdown.
                 app.MapGet("/health", () => Results.Ok());
 
                 Write a direct, useful final answer.
@@ -58,7 +60,55 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("- Review the backend API endpoints and summarize them", response.Content);
+        Assert.Contains("Request: Review the backend API endpoints and summarize them", response.Content);
+        Assert.Contains("Backend findings:", response.Content);
+        Assert.Contains("GET /health", response.Content);
+        Assert.False(response.Content.StartsWith("{", StringComparison.Ordinal));
         Assert.DoesNotContain("Intent understood:\r\n- Review the backend API endpoints and summarize them    Plan:", response.Content);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_PlanningReadsGoalFromNextLine()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.User, """
+                Return a JSON plan only.
+                Goal:
+                train the local reasoning model
+
+                Available tools:
+                - memory.search
+                - workspace.summary
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        Assert.Contains("train the local reasoning model", response.Content);
+    }
+
+    [Fact]
+    public async Task CompleteAsync_UnderstandingDetectsModelTrainingTask()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.User, """
+                Classify the user's message.
+                User message:
+                backend model is not thinking, build and train a smarter neural reasoning model
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        using var json = JsonDocument.Parse(response.Content);
+        Assert.Equal("workspace_task", json.RootElement.GetProperty("intent").GetString());
+        Assert.Equal("model", json.RootElement.GetProperty("topic").GetString());
+        Assert.True(json.RootElement.GetProperty("requiresTools").GetBoolean());
     }
 }

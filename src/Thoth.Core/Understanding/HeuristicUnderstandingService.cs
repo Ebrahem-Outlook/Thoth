@@ -23,6 +23,15 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "write",
         "search",
         "run",
+        "model",
+        "llm",
+        "reason",
+        "reasoning",
+        "brain",
+        "neural",
+        "train",
+        "think",
+        "intelligence",
         "\u0646\u0641\u0630",
         "\u0627\u0628\u0646\u064a",
         "\u0627\u0643\u062a\u0628",
@@ -34,7 +43,13 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "\u0628\u0627\u0643",
         "\u0641\u0631\u0648\u0646\u062a",
         "\u0648\u0627\u062c\u0647\u0629",
-        "\u0627\u0646\u062c\u0644\u0648\u0631"
+        "\u0627\u0646\u062c\u0644\u0648\u0631",
+        "\u0645\u0648\u062f\u064a\u0644",
+        "\u064a\u0641\u0643\u0631",
+        "\u0639\u0642\u0644",
+        "\u0630\u0643\u064a",
+        "\u062a\u062f\u0631\u064a\u0628",
+        "\u0639\u0635\u0628\u064a"
     ];
 
     private static readonly string[] FrontendTerms =
@@ -51,6 +66,24 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "api",
         "backend",
         "\u0628\u0627\u0643"
+    ];
+
+    private static readonly string[] ModelTerms =
+    [
+        "model",
+        "llm",
+        "reasoning",
+        "brain",
+        "neural",
+        "train",
+        "think",
+        "intelligence",
+        "\u0645\u0648\u062f\u064a\u0644",
+        "\u064a\u0641\u0643\u0631",
+        "\u0639\u0642\u0644",
+        "\u0630\u0643\u064a",
+        "\u062a\u062f\u0631\u064a\u0628",
+        "\u0639\u0635\u0628\u064a"
     ];
 
     public Task<UnderstandingResult> UnderstandAsync(
@@ -102,6 +135,11 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         if (ContainsAny(text, FrontendTerms))
         {
             return "frontend";
+        }
+
+        if (ContainsAny(text, ModelTerms))
+        {
+            return "model";
         }
 
         if (ContainsAny(text, BackendTerms))

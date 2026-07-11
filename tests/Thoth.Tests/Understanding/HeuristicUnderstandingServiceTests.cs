@@ -44,4 +44,18 @@ public sealed class HeuristicUnderstandingServiceTests
         Assert.Equal("vision_chat", result.Intent);
         Assert.True(result.RequiresVision);
     }
+
+    [Fact]
+    public async Task UnderstandAsync_DetectsModelReasoningTask()
+    {
+        var service = new HeuristicUnderstandingService();
+
+        var result = await service.UnderstandAsync(new UnderstandingRequest(
+            "\u0627\u0644 backend \u0645\u0628\u064a\u0641\u0643\u0631\u0634 \u0648\u0639\u0627\u064a\u0632 \u0645\u0648\u062f\u064a\u0644 \u0630\u0643\u064a \u064a\u062a\u062f\u0631\u0628 \u0645\u062d\u0644\u064a\u0627",
+            []));
+
+        Assert.Equal("workspace_task", result.Intent);
+        Assert.Equal("model", result.Topic);
+        Assert.True(result.RequiresTools);
+    }
 }

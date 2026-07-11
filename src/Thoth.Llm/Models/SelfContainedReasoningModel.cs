@@ -64,12 +64,12 @@ public sealed class SelfContainedReasoningModel : IChatModel
     public Task<ChatResponse> CompleteAsync(ChatRequest request, CancellationToken cancellationToken = default)
     {
         var transcript = string.Join("\n", request.Messages.Select(message => message.Content));
-        var content = transcript.Contains("Return a JSON plan only", StringComparison.OrdinalIgnoreCase)
-            ? CreatePlan(transcript)
-            : transcript.Contains("Classify the user's message", StringComparison.OrdinalIgnoreCase)
-                ? CreateUnderstanding(transcript)
-                : transcript.Contains("Observations:", StringComparison.OrdinalIgnoreCase)
-                    ? CreateFinalAnswer(transcript)
+        var content = transcript.Contains("Observations:", StringComparison.OrdinalIgnoreCase)
+            ? CreateFinalAnswer(transcript)
+            : transcript.Contains("Return a JSON plan only", StringComparison.OrdinalIgnoreCase)
+                ? CreatePlan(transcript)
+                : transcript.Contains("Classify the user's message", StringComparison.OrdinalIgnoreCase)
+                    ? CreateUnderstanding(transcript)
                     : CreateDirectReply(request);
 
         return Task.FromResult(new ChatResponse(content, "thoth-self"));
@@ -78,6 +78,7 @@ public sealed class SelfContainedReasoningModel : IChatModel
     private static string CreatePlan(string transcript)
     {
         var goal = ExtractLineAfterLabel(transcript, "Goal:");
+        var signal = LocalSemanticBrain.AnalyzeGoal(goal);
         var lower = goal.ToLowerInvariant();
         var steps = new List<Dictionary<string, object?>>
         {
@@ -106,7 +107,7 @@ public sealed class SelfContainedReasoningModel : IChatModel
             }));
         }
 
-        if (LooksLikeBackendTask(lower))
+        if (LooksLikeBackendTask(lower) || signal.Topic == "backend")
         {
             steps.Add(Step("Read the API entry point.", "file.read", new Dictionary<string, string?>
             {
@@ -125,7 +126,7 @@ public sealed class SelfContainedReasoningModel : IChatModel
             }));
         }
 
-        if (LooksLikeFrontendTask(lower))
+        if (LooksLikeFrontendTask(lower) || signal.Topic == "frontend")
         {
             steps.Add(Step("Read the Angular component logic.", "file.read", new Dictionary<string, string?>
             {
@@ -144,7 +145,36 @@ public sealed class SelfContainedReasoningModel : IChatModel
             }));
         }
 
-        if (LooksLikeArchitectureTask(lower))
+        if (signal.Topic == "model" || signal.Action == "train")
+        {
+            steps.Add(Step("Read the self-contained reasoning model.", "file.read", new Dictionary<string, string?>
+            {
+                ["path"] = "src/Thoth.Llm/Models/SelfContainedReasoningModel.cs",
+                ["maxChars"] = "60000"
+            }));
+            steps.Add(Step("Read the local semantic brain.", "file.read", new Dictionary<string, string?>
+            {
+                ["path"] = "src/Thoth.Llm/Models/LocalSemanticBrain.cs",
+                ["maxChars"] = "60000"
+            }));
+            steps.Add(Step("Read the chat orchestrator.", "file.read", new Dictionary<string, string?>
+            {
+                ["path"] = "src/Thoth.Core/Conversations/ChatOrchestrator.cs",
+                ["maxChars"] = "30000"
+            }));
+            steps.Add(Step("Read the agent engine.", "file.read", new Dictionary<string, string?>
+            {
+                ["path"] = "src/Thoth.Core/Agent/AgentEngine.cs",
+                ["maxChars"] = "35000"
+            }));
+            steps.Add(Step("Read model regression tests.", "file.read", new Dictionary<string, string?>
+            {
+                ["path"] = "tests/Thoth.Tests/Core/SelfContainedReasoningModelTests.cs",
+                ["maxChars"] = "30000"
+            }));
+        }
+
+        if (LooksLikeArchitectureTask(lower) || signal.Topic == "architecture")
         {
             steps.Add(Step("Inspect architecture docs.", "file.read", new Dictionary<string, string?>
             {
@@ -180,15 +210,18 @@ public sealed class SelfContainedReasoningModel : IChatModel
     private static string CreateUnderstanding(string transcript)
     {
         var message = ExtractAfterLabel(transcript, "User message:");
+        var signal = LocalSemanticBrain.AnalyzeGoal(message);
         var lower = message.ToLowerInvariant();
         var hasArabic = HasArabic(message);
-        var requiresTools = LooksLikeBackendTask(lower) ||
+        var requiresTools = signal.RequiresTools ||
+                            LooksLikeBackendTask(lower) ||
                             LooksLikeFrontendTask(lower) ||
                             LooksLikeArchitectureTask(lower) ||
                             ContainsAny(lower, "code", "file", "project", "repo", "workspace", "build", "test", "bug", "implement", "refactor") ||
                             hasArabic && ContainsAny(message, ArabicWorkspaceTerms);
 
-        var topic = LooksLikeFrontendTask(lower) ? "frontend" :
+        var topic = signal.Topic != "general" ? signal.Topic :
+            LooksLikeFrontendTask(lower) ? "frontend" :
             LooksLikeBackendTask(lower) ? "backend" :
             LooksLikeArchitectureTask(lower) ? "architecture" :
             requiresTools ? "workspace" : "general";
@@ -201,8 +234,8 @@ public sealed class SelfContainedReasoningModel : IChatModel
             requiresTools,
             requiresVision = transcript.Contains("image/", StringComparison.OrdinalIgnoreCase),
             isLongContext = message.Length > 8000,
-            confidence = requiresTools ? 0.84 : 0.64,
-            summary = SingleLine(message, 220)
+            confidence = requiresTools ? Math.Max(signal.Confidence, 0.84) : signal.Confidence,
+            summary = signal.Summary
         };
 
         return JsonSerializer.Serialize(payload);
@@ -212,59 +245,7 @@ public sealed class SelfContainedReasoningModel : IChatModel
     {
         var goal = ExtractBetweenLabels(transcript, "Goal:", "Plan:");
         var observations = ExtractBetweenLabels(transcript, "Observations:", "Write a direct");
-        var lowerGoal = goal.ToLowerInvariant();
-        var arabic = HasArabic(goal);
-        var toolNames = Regex.Matches(observations, @"Tool:\s*(?<tool>[\w.]+)")
-            .Select(match => match.Groups["tool"].Value)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToArray();
-
-        var builder = new StringBuilder();
-        builder.AppendLine(arabic
-            ? "\u0631\u0627\u062c\u0639\u062a \u0627\u0644\u0637\u0644\u0628 \u0628\u0623\u062f\u0648\u0627\u062a Thoth \u0627\u0644\u0645\u062d\u0644\u064a\u0629."
-            : "I inspected the workspace with Thoth's local tools.");
-        if (arabic)
-        {
-            builder.AppendLine("Arabic request detected and routed through internal understanding rules.");
-        }
-
-        builder.AppendLine();
-        builder.AppendLine("Intent understood:");
-        builder.AppendLine($"- {SingleLine(goal, 260)}");
-        builder.AppendLine();
-
-        if (LooksLikeBackendTask(lowerGoal))
-        {
-            AppendBackendFindings(builder, observations);
-        }
-        else if (LooksLikeFrontendTask(lowerGoal))
-        {
-            AppendFrontendFindings(builder, observations);
-        }
-        else
-        {
-            AppendGeneralFindings(builder, observations);
-        }
-
-        builder.AppendLine();
-        builder.AppendLine("Tools used:");
-        if (toolNames.Length == 0)
-        {
-            builder.AppendLine("- none");
-        }
-        else
-        {
-            foreach (var toolName in toolNames)
-            {
-                builder.AppendLine($"- {toolName}");
-            }
-        }
-
-        builder.AppendLine();
-        builder.AppendLine("Next best move:");
-        builder.AppendLine(SuggestNextMove(lowerGoal));
-
-        return builder.ToString().Trim();
+        return LocalSemanticBrain.BuildFinalAnswer(goal, observations);
     }
 
     private static string CreateDirectReply(ChatRequest request)
@@ -289,30 +270,7 @@ public sealed class SelfContainedReasoningModel : IChatModel
                 : "I can help with code, UI, backend APIs, project review, file analysis, memory, and workspace inspection. For anything project-related, I should use Thoth's tools first so the answer is based on the actual files instead of guessing.";
         }
 
-        var builder = new StringBuilder();
-        builder.AppendLine(arabic
-            ? "\u0641\u0647\u0645\u062a \u0637\u0644\u0628\u0643."
-            : "I understand.");
-
-        if (!string.IsNullOrWhiteSpace(text))
-        {
-            builder.AppendLine(arabic ? "\u0627\u0644\u0645\u0642\u0635\u0648\u062f:" : "Request:");
-            builder.AppendLine($"- {SingleLine(text, 320)}");
-        }
-
-        if (hasImage)
-        {
-            builder.AppendLine();
-            builder.AppendLine(arabic
-                ? "\u0627\u0644\u0635\u0648\u0631\u0629 \u0648\u0635\u0644\u062a \u0648\u0647\u062a\u062a\u062e\u0632\u0646 \u0645\u0639 \u0627\u0644\u0645\u062d\u0627\u062f\u062b\u0629. \u062a\u0641\u0633\u064a\u0631 \u0627\u0644\u0635\u0648\u0631 \u0646\u0641\u0633\u0647 \u0645\u062d\u062a\u0627\u062c \u0645\u0648\u062f\u064a\u0648\u0644 vision \u062f\u0627\u062e\u0644\u064a."
-                : "The image/file is attached and stored with the conversation. Pixel-level image interpretation still needs an internal vision module.");
-        }
-
-        builder.AppendLine();
-        builder.AppendLine(arabic
-            ? "\u0627\u0644\u062e\u0637\u0648\u0629 \u0627\u0644\u062c\u0627\u064a\u0629: \u0627\u062f\u064a\u0646\u064a \u0647\u062f\u0641 \u0645\u062d\u062f\u062f \u0623\u0648 \u0627\u0641\u062a\u062d Tools \u0644\u0648 \u0639\u0627\u064a\u0632\u0646\u064a \u0623\u0641\u062a\u0634 \u062c\u0648\u0647 \u0627\u0644\u0645\u0634\u0631\u0648\u0639."
-            : "Next step: give me a concrete goal, or keep Tools enabled if you want me to inspect the project before answering.");
-        return builder.ToString().Trim();
+        return LocalSemanticBrain.BuildDirectReply(text, hasImage);
     }
 
     private static void AppendBackendFindings(StringBuilder builder, string observations)
@@ -458,9 +416,27 @@ public sealed class SelfContainedReasoningModel : IChatModel
 
         var valueStart = index + label.Length;
         var lineEnd = text.IndexOf('\n', valueStart);
-        return lineEnd < 0
+        var lineValue = lineEnd < 0
             ? text[valueStart..].Trim()
             : text[valueStart..lineEnd].Trim();
+
+        if (!string.IsNullOrWhiteSpace(lineValue))
+        {
+            return lineValue;
+        }
+
+        var remaining = lineEnd < 0 ? string.Empty : text[(lineEnd + 1)..];
+        foreach (var line in remaining.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (line.EndsWith(':'))
+            {
+                break;
+            }
+
+            return line.Trim();
+        }
+
+        return string.Empty;
     }
 
     private static string ExtractLikelyPath(string goal)
