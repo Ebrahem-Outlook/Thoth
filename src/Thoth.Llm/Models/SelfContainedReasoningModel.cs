@@ -11,19 +11,34 @@ public sealed class SelfContainedReasoningModel : IChatModel
     [
         "\u0645\u0634\u0631\u0648\u0639",
         "\u0645\u0644\u0641",
-        "\u0639\u062f\u0644",
-        "\u062d\u0633\u0646",
-        "\u0627\u0628\u0646\u064a",
-        "\u0646\u0641\u0630",
+        "\u0641\u0631\u0648\u0646\u062a",
+        "\u0648\u0627\u062c\u0647\u0629",
+        "\u0628\u0627\u0643",
+        "\u0627\u0646\u062c\u0644\u0648\u0631",
+        "\u0645\u0648\u062f\u064a\u0644",
+        "\u062a\u062f\u0631\u064a\u0628",
+        "\u0639\u0635\u0628\u064a"
+    ];
+
+    private static readonly string[] CodeGenerationTerms =
+    [
+        "code",
+        "c#",
+        "csharp",
+        ".net",
+        "dotnet",
+        "method",
+        "meethod",
+        "methd",
+        "function",
+        "class",
+        "snippet",
         "\u0643\u0648\u062f",
         "\u0645\u064a\u062b\u0648\u062f",
         "\u0645\u064a\u062b\u062f",
         "\u062f\u0627\u0644\u0629",
         "\u0643\u0644\u0627\u0633",
-        "\u0641\u0631\u0648\u0646\u062a",
-        "\u0648\u0627\u062c\u0647\u0629",
-        "\u0628\u0627\u0643",
-        "\u0627\u0646\u062c\u0644\u0648\u0631"
+        "\u0633\u064a \u0634\u0627\u0631\u0628"
     ];
 
     private static readonly string[] BackendTerms =
@@ -54,7 +69,6 @@ public sealed class SelfContainedReasoningModel : IChatModel
     private static readonly string[] FrontendTerms =
     [
         "frontend",
-        "ui",
         "angular",
         "component",
         "html",
@@ -228,28 +242,33 @@ public sealed class SelfContainedReasoningModel : IChatModel
         var signal = LocalSemanticBrain.AnalyzeGoal(message);
         var lower = message.ToLowerInvariant();
         var hasArabic = HasArabic(message);
-        var requiresTools = signal.RequiresTools ||
-                            LooksLikeBackendTask(lower) ||
-                            LooksLikeFrontendTask(lower) ||
-                            LooksLikeArchitectureTask(lower) ||
-                            ContainsAny(lower, "code", "file", "project", "repo", "workspace", "build", "test", "bug", "implement", "refactor", "method", "function", "class", "c#", "csharp", ".net", "dotnet") ||
-                            hasArabic && ContainsAny(message, ArabicWorkspaceTerms);
+        var codeGeneration = LooksLikeGenericCodeGeneration(lower, message);
+        var projectBound = LooksLikeProjectBoundTask(lower, message) || LooksLikeFileTask(lower) || LooksLikeCommandTask(lower);
+        var backendWorkspaceTask = LooksLikeBackendWorkspaceTask(lower, message);
+        var frontendTask = LooksLikeFrontendTask(lower);
+        var architectureTask = LooksLikeArchitectureTask(lower);
+        var requiresTools = projectBound ||
+                            backendWorkspaceTask ||
+                            frontendTask ||
+                            architectureTask ||
+                            signal.RequiresTools && !(codeGeneration && !projectBound);
 
-        var topic = signal.Topic != "general" ? signal.Topic :
-            LooksLikeFrontendTask(lower) ? "frontend" :
-            LooksLikeBackendTask(lower) ? "backend" :
-            LooksLikeArchitectureTask(lower) ? "architecture" :
+        var topic = codeGeneration && !requiresTools ? "coding" :
+            signal.Topic != "general" ? signal.Topic :
+            frontendTask ? "frontend" :
+            backendWorkspaceTask || LooksLikeBackendTask(lower) && projectBound ? "backend" :
+            architectureTask ? "architecture" :
             requiresTools ? "workspace" : "general";
 
         var payload = new
         {
-            intent = requiresTools ? "workspace_task" : "general_chat",
+            intent = requiresTools ? "workspace_task" : codeGeneration ? "code_generation" : "general_chat",
             topic,
             language = hasArabic ? "ar" : "en",
             requiresTools,
             requiresVision = transcript.Contains("image/", StringComparison.OrdinalIgnoreCase),
             isLongContext = message.Length > 8000,
-            confidence = requiresTools ? Math.Max(signal.Confidence, 0.84) : signal.Confidence,
+            confidence = requiresTools ? Math.Max(signal.Confidence, 0.84) : codeGeneration ? Math.Max(signal.Confidence, 0.82) : signal.Confidence,
             summary = signal.Summary
         };
 
@@ -285,8 +304,59 @@ public sealed class SelfContainedReasoningModel : IChatModel
                 : "I can help with code, UI, backend APIs, project review, file analysis, memory, and workspace inspection. For anything project-related, I should use Thoth's tools first so the answer is based on the actual files instead of guessing.";
         }
 
+        if (LooksLikeGenericCodeGeneration(lower, text) &&
+            !LooksLikeProjectBoundTask(lower, text) &&
+            !LooksLikeFileTask(lower) &&
+            !LooksLikeCommandTask(lower))
+        {
+            return BuildGenericCodeReply(arabic);
+        }
+
         return LocalSemanticBrain.BuildDirectReply(text, hasImage);
     }
+
+    private static string BuildGenericCodeReply(bool arabic) =>
+        arabic
+            ? """
+              أكيد. بس الطلب ناقص أهم جزء: الميثود تعمل إيه بالضبط؟ لحد ما تحدد المطلوب، ده قالب C# نظيف تقدر تبني عليه:
+
+              ```csharp
+              public static bool TryNormalizeName(string? value, out string normalized)
+              {
+                  normalized = string.Empty;
+
+                  if (string.IsNullOrWhiteSpace(value))
+                  {
+                      return false;
+                  }
+
+                  normalized = value.Trim();
+                  return true;
+              }
+              ```
+
+              ابعتلي اسم الميثود، المدخلات، الناتج المتوقع، وقواعد الـ validation، وأنا أطلعها جاهزة على المطلوب.
+              """
+            : """
+              Sure. I need the method's purpose before I can write the exact version. Here is a clean C# template you can build from:
+
+              ```csharp
+              public static bool TryNormalizeName(string? value, out string normalized)
+              {
+                  normalized = string.Empty;
+
+                  if (string.IsNullOrWhiteSpace(value))
+                  {
+                      return false;
+                  }
+
+                  normalized = value.Trim();
+                  return true;
+              }
+              ```
+
+              Send me the method name, inputs, expected return value, and validation rules, and I will write the final method.
+              """;
 
     private static void AppendBackendFindings(StringBuilder builder, string observations)
     {
@@ -475,14 +545,38 @@ public sealed class SelfContainedReasoningModel : IChatModel
     private static bool LooksLikeBackendTask(string lower) =>
         ContainsAny(lower, BackendTerms);
 
+    private static bool LooksLikeBackendWorkspaceTask(string lower, string text) =>
+        ContainsAny(lower, "backend", "api", "endpoint", "http", "controller", "route", "server", "swagger", "asp.net", "program.cs") ||
+        ContainsAny(text, "\u0628\u0627\u0643");
+
     private static bool LooksLikeFrontendTask(string lower) =>
-        ContainsAny(lower, FrontendTerms);
+        ContainsAny(lower, FrontendTerms) || ContainsWholeWord(lower, "ui");
 
     private static bool LooksLikeArchitectureTask(string lower) =>
         ContainsAny(lower, ArchitectureTerms);
 
+    private static bool LooksLikeGenericCodeGeneration(string lower, string text) =>
+        ContainsAny(lower, CodeGenerationTerms) ||
+        ContainsAny(text, "\u0633\u064a \u0634\u0627\u0631\u0628");
+
+    private static bool LooksLikeProjectBoundTask(string lower, string text) =>
+        ContainsAny(lower, "workspace", "project", "repo", "file", "src/", "tests/", "program.cs", "api", "endpoint", "backend", "frontend", "angular", "component", "controller", "route", "swagger", "bug", "fix", "refactor", "model", "llm", "train", "neural", "reasoning", "brain") ||
+        ContainsWholeWord(lower, "ui") ||
+        ContainsAny(text, ArabicWorkspaceTerms) ||
+        ContainsAny(text, "\u0641\u064a \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u062f\u0627\u062e\u0644 \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u0641\u064a \u0627\u0644\u0645\u0644\u0641");
+
+    private static bool LooksLikeFileTask(string lower) =>
+        ContainsAny(lower, ".cs", ".ts", ".html", ".scss", ".json", ".md", ".csproj", ".sln");
+
+    private static bool LooksLikeCommandTask(string lower) =>
+        lower.StartsWith("run ", StringComparison.OrdinalIgnoreCase) ||
+        ContainsAny(lower, "dotnet ", "npm ", "ng ");
+
     private static bool ContainsAny(string value, params string[] needles) =>
         needles.Any(needle => value.Contains(needle, StringComparison.OrdinalIgnoreCase));
+
+    private static bool ContainsWholeWord(string value, string word) =>
+        Regex.IsMatch(value, $@"(?<![\p{{L}}\p{{N}}_]){Regex.Escape(word)}(?![\p{{L}}\p{{N}}_])", RegexOptions.IgnoreCase);
 
     private static bool HasArabic(string text) => text.Any(c => c >= 0x0600 && c <= 0x06FF);
 

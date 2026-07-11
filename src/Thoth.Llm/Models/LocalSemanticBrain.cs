@@ -13,6 +13,8 @@ internal static class LocalSemanticBrain
         new("backend", "c# csharp .net dotnet method function class service controller repository async task linq"),
         new("backend", "\u0628\u0627\u0643 api endpoint http request server swagger"),
         new("backend", "\u0643\u0648\u062f \u0645\u064a\u062b\u0648\u062f \u0645\u064a\u062b\u062f \u062f\u0627\u0644\u0629 \u0643\u0644\u0627\u0633 \u0633\u064a \u0634\u0627\u0631\u0628"),
+        new("coding", "write generate code snippet method function class c# csharp .net dotnet"),
+        new("coding", "\u0627\u0643\u062a\u0628 \u0643\u0648\u062f \u0627\u0639\u0645\u0644 \u0645\u064a\u062b\u0648\u062f \u0645\u064a\u062b\u062f \u062f\u0627\u0644\u0629 \u0643\u0644\u0627\u0633"),
         new("frontend", "frontend angular ui component html scss css browser user experience chat composer sidebar panel"),
         new("frontend", "\u0641\u0631\u0648\u0646\u062a \u0648\u0627\u062c\u0647\u0629 \u0627\u0646\u062c\u0644\u0648\u0631 ui"),
         new("model", "model llm reasoning brain neural think intelligence train understand planner embeddings semantic agent cognition"),
@@ -40,6 +42,8 @@ internal static class LocalSemanticBrain
         var lower = text.ToLowerInvariant();
         var language = HasArabic(text) ? "ar" : "en";
         var keywords = ExtractKeywords(text, 8);
+        var codeGeneration = LooksLikeGenericCodeGeneration(lower, text);
+        var projectBound = LooksLikeProjectBoundTask(lower, text);
 
         if (IsCasualChat(lower, text))
         {
@@ -52,8 +56,17 @@ internal static class LocalSemanticBrain
         topic = OverrideTopic(lower, topic);
         action = OverrideAction(lower, action);
 
+        if (codeGeneration && !projectBound)
+        {
+            topic = "coding";
+            if (action == "chat")
+            {
+                action = "build";
+            }
+        }
+
         var explicitToolSignal = HasExplicitToolSignal(lower, text);
-        if (!explicitToolSignal && keywords.Count <= 3)
+        if (!explicitToolSignal && !codeGeneration && keywords.Count <= 3)
         {
             topic = "general";
             action = "chat";
@@ -61,7 +74,11 @@ internal static class LocalSemanticBrain
 
         var requiresTools = explicitToolSignal &&
                             (topic is not "general" ||
-                             action is "inspect" or "build" or "fix" or "train" or "test");
+                              action is "inspect" or "build" or "fix" or "train" or "test");
+        if (codeGeneration && !projectBound)
+        {
+            requiresTools = false;
+        }
 
         var confidence = Math.Clamp(Math.Max(topicScore, actionScore), 0.58, 0.95);
         return new BrainSignal(topic, action, language, confidence, SingleLine(text, 240), keywords, requiresTools);
@@ -135,6 +152,11 @@ internal static class LocalSemanticBrain
 
         if (!signal.RequiresTools)
         {
+            if (signal.Topic == "coding")
+            {
+                return BuildGenericCodeReply(signal.Language == "ar");
+            }
+
             return signal.Language == "ar"
                 ? "\u0641\u0627\u0647\u0645\u0643. \u062f\u0647 \u0643\u0644\u0627\u0645 \u0639\u0627\u062f\u064a\u060c \u0641\u0647\u0631\u062f \u0639\u0644\u064a\u0643 \u0645\u0628\u0627\u0634\u0631\u0629 \u0645\u0646 \u063a\u064a\u0631 \u062a\u0634\u063a\u064a\u0644 \u0623\u062f\u0648\u0627\u062a \u0623\u0648 \u062a\u062e\u0645\u064a\u0646 \u0625\u0646\u0647 \u0637\u0644\u0628 \u0643\u0648\u062f."
                 : "I understand. This is normal conversation, so I should answer directly without running tools or pretending it is a code task.";
@@ -163,6 +185,49 @@ internal static class LocalSemanticBrain
 
         return builder.ToString().Trim();
     }
+
+    private static string BuildGenericCodeReply(bool arabic) =>
+        arabic
+            ? """
+              أكيد. بس الطلب ناقص أهم جزء: الميثود تعمل إيه بالضبط؟ لحد ما تحدد المطلوب، ده قالب C# نظيف تقدر تبني عليه:
+
+              ```csharp
+              public static bool TryNormalizeName(string? value, out string normalized)
+              {
+                  normalized = string.Empty;
+
+                  if (string.IsNullOrWhiteSpace(value))
+                  {
+                      return false;
+                  }
+
+                  normalized = value.Trim();
+                  return true;
+              }
+              ```
+
+              ابعتلي اسم الميثود، المدخلات، الناتج المتوقع، وقواعد الـ validation، وأنا أطلعها جاهزة على المطلوب.
+              """
+            : """
+              Sure. I need the method's purpose before I can write the exact version. Here is a clean C# template you can build from:
+
+              ```csharp
+              public static bool TryNormalizeName(string? value, out string normalized)
+              {
+                  normalized = string.Empty;
+
+                  if (string.IsNullOrWhiteSpace(value))
+                  {
+                      return false;
+                  }
+
+                  normalized = value.Trim();
+                  return true;
+              }
+              ```
+
+              Send me the method name, inputs, expected return value, and validation rules, and I will write the final method.
+              """;
 
     private static void AppendUnderstanding(StringBuilder builder, BrainSignal signal)
     {
@@ -505,14 +570,15 @@ internal static class LocalSemanticBrain
         }
 
         if (ContainsAny(lower, "backend", "endpoint", "api", "swagger", "controller", "route") ||
-            ContainsAny(lower, "c#", "csharp", ".net", "dotnet", "method", "function", "class", "service") ||
+            ContainsAny(lower, "service") && LooksLikeProjectBoundTask(lower, lower) ||
             ContainsAny(lower, "\u0628\u0627\u0643") ||
-            ContainsAny(lower, "\u0645\u064a\u062b\u0648\u062f", "\u0645\u064a\u062b\u062f", "\u062f\u0627\u0644\u0629", "\u0643\u0644\u0627\u0633", "\u0633\u064a \u0634\u0627\u0631\u0628"))
+            ContainsAny(lower, "\u0633\u064a \u0634\u0627\u0631\u0628") && LooksLikeProjectBoundTask(lower, lower))
         {
             return "backend";
         }
 
-        if (ContainsAny(lower, "frontend", "angular", "ui", "component", "html", "scss") ||
+        if (ContainsAny(lower, "frontend", "angular", "component", "html", "scss") ||
+            ContainsWholeWord(lower, "ui") ||
             ContainsAny(lower, "\u0641\u0631\u0648\u0646\u062a", "\u0648\u0627\u062c\u0647\u0629", "\u0627\u0646\u062c\u0644\u0648\u0631"))
         {
             return "frontend";
@@ -546,9 +612,20 @@ internal static class LocalSemanticBrain
     private static bool ContainsAny(string value, params string[] terms) =>
         terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
 
+    private static bool ContainsWholeWord(string value, string word) =>
+        Regex.IsMatch(value, $@"(?<![\p{{L}}\p{{N}}_]){Regex.Escape(word)}(?![\p{{L}}\p{{N}}_])", RegexOptions.IgnoreCase);
+
+    private static bool LooksLikeGenericCodeGeneration(string lower, string text) =>
+        ContainsAny(lower, "code", "c#", "csharp", ".net", "dotnet", "method", "meethod", "methd", "function", "class", "snippet") ||
+        ContainsAny(text, "\u0643\u0648\u062f", "\u0645\u064a\u062b\u0648\u062f", "\u0645\u064a\u062b\u062f", "\u062f\u0627\u0644\u0629", "\u0643\u0644\u0627\u0633", "\u0633\u064a \u0634\u0627\u0631\u0628");
+
+    private static bool LooksLikeProjectBoundTask(string lower, string text) =>
+        ContainsAny(lower, "workspace", "project", "repo", "file", "src/", "tests/", "program.cs", ".cs", ".ts", ".html", ".scss", ".json", ".md", ".csproj", ".sln", "backend", "frontend", "angular", "component", "api", "endpoint", "controller", "route", "swagger", "bug", "fix", "refactor", "model", "llm", "train", "neural", "reasoning", "brain") ||
+        ContainsWholeWord(lower, "ui") ||
+        ContainsAny(text, "\u0645\u0634\u0631\u0648\u0639", "\u0645\u0644\u0641", "\u0628\u0627\u0643", "\u0641\u0631\u0648\u0646\u062a", "\u0648\u0627\u062c\u0647\u0629", "\u0645\u0648\u062f\u064a\u0644", "\u062a\u062f\u0631\u064a\u0628", "\u0639\u0635\u0628\u064a", "\u0641\u064a \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u062f\u0627\u062e\u0644 \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u0641\u064a \u0627\u0644\u0645\u0644\u0641");
+
     private static bool HasExplicitToolSignal(string lower, string text) =>
-        ContainsAny(lower, "workspace", "project", "repo", "file", ".cs", ".ts", ".html", ".scss", "code", "backend", "frontend", "api", "endpoint", "bug", "fix", "build", "implement", "refactor", "model", "llm", "train", "neural", "reasoning", "c#", "csharp", ".net", "dotnet", "method", "function", "class", "service") ||
-        ContainsAny(text, "\u0645\u0634\u0631\u0648\u0639", "\u0645\u0644\u0641", "\u0643\u0648\u062f", "\u0645\u064a\u062b\u0648\u062f", "\u0645\u064a\u062b\u062f", "\u062f\u0627\u0644\u0629", "\u0643\u0644\u0627\u0633", "\u0628\u0627\u0643", "\u0641\u0631\u0648\u0646\u062a", "\u0648\u0627\u062c\u0647\u0629", "\u0645\u0648\u062f\u064a\u0644", "\u062a\u062f\u0631\u064a\u0628", "\u0639\u0635\u0628\u064a");
+        LooksLikeProjectBoundTask(lower, text);
 
     private static bool IsCasualChat(string lower, string text)
     {

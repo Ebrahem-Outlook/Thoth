@@ -130,8 +130,33 @@ public sealed class SelfContainedReasoningModelTests
 
     [Theory]
     [InlineData("can you build a C# method")]
+    [InlineData("\u0639\u0627\u064a\u0632\u0643 \u062a\u0639\u0645\u0644\u064a meethod in C#")]
     [InlineData("\u0641\u064a\u0646 \u0627\u0644 method \u062a\u0639\u0631\u0641 \u062a\u0639\u0645\u0644\u064a")]
     public async Task CompleteAsync_UnderstandingDetectsCodingMethodTask(string message)
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.User, $"""
+                Classify the user's message.
+                User message:
+                {message}
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        using var json = JsonDocument.Parse(response.Content);
+        Assert.Equal("code_generation", json.RootElement.GetProperty("intent").GetString());
+        Assert.Equal("coding", json.RootElement.GetProperty("topic").GetString());
+        Assert.False(json.RootElement.GetProperty("requiresTools").GetBoolean());
+    }
+
+    [Theory]
+    [InlineData("add a C# method to Program.cs")]
+    [InlineData("\u0636\u064a\u0641 method \u0641\u064a \u0645\u0644\u0641 Program.cs")]
+    public async Task CompleteAsync_UnderstandingDetectsProjectBoundMethodTask(string message)
     {
         var model = new SelfContainedReasoningModel();
 
@@ -150,6 +175,23 @@ public sealed class SelfContainedReasoningModelTests
         Assert.Equal("workspace_task", json.RootElement.GetProperty("intent").GetString());
         Assert.Equal("backend", json.RootElement.GetProperty("topic").GetString());
         Assert.True(json.RootElement.GetProperty("requiresTools").GetBoolean());
+    }
+
+    [Fact]
+    public async Task CompleteAsync_GenericArabicMethodRequestReturnsCodePromptNotRouteMap()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [new ChatMessage(ChatRole.User, "\u0639\u0627\u064a\u0632\u0643 \u062a\u0639\u0645\u0644\u064a meethod in C#")],
+            "thoth-self",
+            0));
+
+        Assert.Contains("```csharp", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("public static", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("HTTP routes", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\u0641\u062d\u0635\u062a \u0645\u062d\u0644\u064a\u0627", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("route map", response.Content, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]

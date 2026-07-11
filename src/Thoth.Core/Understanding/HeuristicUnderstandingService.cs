@@ -2,29 +2,23 @@ namespace Thoth.Core.Understanding;
 
 public sealed class HeuristicUnderstandingService : IUserUnderstandingService
 {
-    private static readonly string[] WorkspaceTerms =
+    private static readonly string[] ProjectTerms =
     [
-        "code",
         "file",
         "project",
         "repo",
         "workspace",
-        "build",
         "test",
         "bug",
-        "implement",
         "refactor",
         "api",
         "backend",
         "frontend",
         "angular",
-        "dotnet",
-        "c#",
-        "csharp",
-        ".net",
-        "method",
-        "function",
-        "class",
+        "endpoint",
+        "controller",
+        "route",
+        "swagger",
         "service",
         "read",
         "write",
@@ -39,18 +33,8 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "train",
         "think",
         "intelligence",
-        "\u0646\u0641\u0630",
-        "\u0627\u0628\u0646\u064a",
-        "\u0627\u0643\u062a\u0628",
-        "\u0639\u062f\u0644",
-        "\u062d\u0633\u0646",
         "\u0645\u0634\u0631\u0648\u0639",
         "\u0645\u0644\u0641",
-        "\u0643\u0648\u062f",
-        "\u0645\u064a\u062b\u0648\u062f",
-        "\u062f\u0627\u0644\u0629",
-        "\u0643\u0644\u0627\u0633",
-        "\u0645\u064a\u062b\u062f",
         "\u0628\u0627\u0643",
         "\u0641\u0631\u0648\u0646\u062a",
         "\u0648\u0627\u062c\u0647\u0629",
@@ -61,6 +45,27 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "\u0630\u0643\u064a",
         "\u062a\u062f\u0631\u064a\u0628",
         "\u0639\u0635\u0628\u064a"
+    ];
+
+    private static readonly string[] CodeGenerationTerms =
+    [
+        "code",
+        "c#",
+        "csharp",
+        ".net",
+        "dotnet",
+        "method",
+        "meethod",
+        "methd",
+        "function",
+        "class",
+        "snippet",
+        "\u0627\u0643\u062a\u0628",
+        "\u0643\u0648\u062f",
+        "\u0645\u064a\u062b\u0648\u062f",
+        "\u062f\u0627\u0644\u0629",
+        "\u0643\u0644\u0627\u0633",
+        "\u0645\u064a\u062b\u062f"
     ];
 
     private static readonly string[] FrontendTerms =
@@ -129,9 +134,11 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
                 text.Length > 600 ? text[..600] + "..." : text));
         }
 
-        var requiresTools = LooksLikeWorkspaceTask(lower) || LooksLikeFileTask(lower) || LooksLikeCommandTask(lower);
-        var intent = requiresTools ? "workspace_task" : requiresVision ? "vision_chat" : "general_chat";
-        var topic = InferTopic(lower, request.AttachmentContentTypes);
+        var codeGeneration = LooksLikeCodeGenerationTask(lower, text);
+        var projectBound = LooksLikeProjectTask(lower, text) || LooksLikeFileTask(lower) || LooksLikeCommandTask(lower);
+        var requiresTools = projectBound;
+        var intent = requiresTools ? "workspace_task" : requiresVision ? "vision_chat" : codeGeneration ? "code_generation" : "general_chat";
+        var topic = codeGeneration && !requiresTools ? "coding" : InferTopic(lower, request.AttachmentContentTypes);
         var confidence = requiresTools || requiresVision ? 0.78 : 0.6;
 
         return Task.FromResult(new UnderstandingResult(
@@ -145,8 +152,13 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
             text.Length > 600 ? text[..600] + "..." : text));
     }
 
-    private static bool LooksLikeWorkspaceTask(string text) =>
-        ContainsAny(text, WorkspaceTerms);
+    private static bool LooksLikeProjectTask(string lower, string text) =>
+        ContainsAny(lower, ProjectTerms) ||
+        ContainsAny(text, "\u0641\u064a \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u062f\u0627\u062e\u0644 \u0627\u0644\u0645\u0634\u0631\u0648\u0639", "\u0641\u064a \u0627\u0644\u0645\u0644\u0641");
+
+    private static bool LooksLikeCodeGenerationTask(string lower, string text) =>
+        ContainsAny(lower, CodeGenerationTerms) ||
+        ContainsAny(text, "\u0633\u064a \u0634\u0627\u0631\u0628");
 
     private static bool LooksLikeFileTask(string text) =>
         text.Contains(".cs", StringComparison.OrdinalIgnoreCase) ||
