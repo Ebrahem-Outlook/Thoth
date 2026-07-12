@@ -37,6 +37,12 @@ public static class ThothRuntimeServiceCollectionExtensions
             options.WorkspaceRoot = ResolvePath(options.WorkspaceRoot);
             options.DataDirectory = ResolvePath(options.DataDirectory);
             options.Model.CheckpointPath = ResolvePath(options.Model.CheckpointPath);
+            if (!string.IsNullOrWhiteSpace(options.Model.TokenizerPath) &&
+                !options.Model.TokenizerPath.Equals("byte", StringComparison.OrdinalIgnoreCase))
+            {
+                options.Model.TokenizerPath = ResolvePath(options.Model.TokenizerPath);
+            }
+
             options.Sandbox.AllowedShellExecutables = options.Sandbox.AllowedShellExecutables
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
@@ -45,7 +51,8 @@ public static class ThothRuntimeServiceCollectionExtensions
                 .ToList();
         });
 
-        services.AddSingleton<ITextTokenizer, ByteTokenizer>();
+        services.AddSingleton<ITextTokenizer>(provider =>
+            CreateTokenizer(provider.GetRequiredService<IOptions<ThothOptions>>().Value));
 
         services.AddSingleton<IMemoryStore>(provider =>
         {
@@ -152,19 +159,80 @@ public static class ThothRuntimeServiceCollectionExtensions
             return fallback;
         }
 
-        var model = ModelCheckpoint.LoadAsync(options.Model.CheckpointPath).GetAwaiter().GetResult();
-        var neural = new NeuralChatModel(
-            model,
-            tokenizer,
-            new GenerationOptions
-            {
-                MaxNewTokens = options.Model.MaxNewTokens,
-                Temperature = options.Model.Temperature,
-                TopK = options.Model.TopK,
-                Seed = options.Model.Seed
-            });
+        IChatModel neural;
+        try
+        {
+            neural = CreateQualifiedNeuralModel(options, tokenizer, inspection);
+        }
+        catch (Exception exception) when (provider != "neural" && exception is not OperationCanceledException)
+        {
+            return fallback;
+        }
+
         return new QualityGatedChatModel(neural, fallback, inspection);
     }
+
+    private static IChatModel CreateQualifiedNeuralModel(
+        ThothOptions options,
+        ITextTokenizer tokenizer,
+        ModelCheckpointInspection inspection)
+    {
+        if (inspection.Metadata is null)
+        {
+            throw new InvalidOperationException("Qualified checkpoint metadata is missing.");
+        }
+
+        if (!IsTokenizerCompatible(inspection.Metadata.Tokenizer, tokenizer))
+        {
+            throw new InvalidOperationException(
+                $"Runtime tokenizer cannot serve checkpoint tokenizer {inspection.Metadata.Tokenizer}.");
+        }
+
+        var generationOptions = new GenerationOptions
+        {
+            MaxNewTokens = options.Model.MaxNewTokens,
+            Temperature = options.Model.Temperature,
+            TopK = options.Model.TopK,
+            Seed = options.Model.Seed
+        };
+
+        return inspection.Metadata.Architecture switch
+        {
+            ModelCheckpointMetadata.LegacyRecurrentArchitecture => new NeuralChatModel(
+                ModelCheckpoint.LoadAsync(options.Model.CheckpointPath).GetAwaiter().GetResult(),
+                tokenizer,
+                generationOptions),
+            ModelCheckpointMetadata.TransformerArchitecture => new TransformerChatModel(
+                TransformerCheckpoint.LoadAsync(options.Model.CheckpointPath).GetAwaiter().GetResult(),
+                tokenizer,
+                generationOptions),
+            ModelCheckpointMetadata.TorchTransformerArchitecture => new TorchTransformerChatModel(
+                TorchTransformerCheckpoint.LoadAsync(options.Model.CheckpointPath).GetAwaiter().GetResult(),
+                tokenizer,
+                generationOptions),
+            _ => throw new InvalidOperationException($"Unsupported checkpoint architecture {inspection.Metadata.Architecture}.")
+        };
+    }
+
+    private static ITextTokenizer CreateTokenizer(ThothOptions options)
+    {
+        var tokenizerPath = options.Model.TokenizerPath;
+        if (string.IsNullOrWhiteSpace(tokenizerPath) ||
+            tokenizerPath.Equals("byte", StringComparison.OrdinalIgnoreCase))
+        {
+            return new ByteTokenizer();
+        }
+
+        return BpeTokenizer.LoadAsync(tokenizerPath).GetAwaiter().GetResult();
+    }
+
+    private static bool IsTokenizerCompatible(string expectedTokenizer, ITextTokenizer tokenizer) =>
+        expectedTokenizer switch
+        {
+            ModelCheckpointMetadata.ByteTokenizer => tokenizer is ByteTokenizer,
+            ModelCheckpointMetadata.BpeTokenizer => tokenizer is BpeTokenizer,
+            _ => false
+        };
 
     private static CheckpointQualityThresholds ToThresholds(CheckpointQualityOptions options) =>
         new(
@@ -201,9 +269,113 @@ public static class ThothRuntimeServiceCollectionExtensions
                 _ => ModelRole.Generation
             };
 
-            return inspection.CanUse(role)
-                ? neural.CompleteAsync(request, cancellationToken)
-                : fallback.CompleteAsync(request, cancellationToken);
+            if (!inspection.CanUse(role))
+            {
+                return fallback.CompleteAsync(request, cancellationToken);
+            }
+
+            return CompleteSafelyAsync(request, cancellationToken);
+        }
+
+        private async Task<ChatResponse> CompleteSafelyAsync(
+            ChatRequest request,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                var response = await neural.CompleteAsync(request, cancellationToken);
+                return ModelOutputSafety.IsUsable(response.Content)
+                    ? response
+                    : await fallback.CompleteAsync(request, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return await fallback.CompleteAsync(request, cancellationToken);
+            }
+        }
+    }
+
+    private static class ModelOutputSafety
+    {
+        private static readonly string[] InternalMarkers =
+        [
+            "ordered tasks",
+            "request.atomize",
+            "language.prepare",
+            "contract.design",
+            "answer.revise",
+            "internal critique",
+            "executed observations",
+            "stop reason:",
+            "cognitive frame",
+            "route:",
+            "intent:",
+            "terms:"
+        ];
+
+        public static bool IsUsable(string? content)
+        {
+            if (string.IsNullOrWhiteSpace(content) || content.Contains('\uFFFD'))
+            {
+                return false;
+            }
+
+            if (!HasValidUtf16(content))
+            {
+                return false;
+            }
+
+            if (InternalMarkers.Any(marker => content.Contains(marker, StringComparison.OrdinalIgnoreCase)))
+            {
+                return false;
+            }
+
+            return !IsDegenerate(content);
+        }
+
+        private static bool HasValidUtf16(string value)
+        {
+            for (var index = 0; index < value.Length; index++)
+            {
+                var current = value[index];
+                if (char.IsHighSurrogate(current))
+                {
+                    if (index + 1 >= value.Length || !char.IsLowSurrogate(value[index + 1]))
+                    {
+                        return false;
+                    }
+
+                    index++;
+                    continue;
+                }
+
+                if (char.IsLowSurrogate(current))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool IsDegenerate(string output)
+        {
+            var nonWhite = output.Where(ch => !char.IsWhiteSpace(ch)).ToArray();
+            if (nonWhite.Length >= 24)
+            {
+                var mostCommon = nonWhite
+                    .GroupBy(ch => ch)
+                    .Max(group => group.Count());
+                if (mostCommon / (double)nonWhite.Length > 0.72)
+                {
+                    return true;
+                }
+            }
+
+            var words = output
+                .Split([' ', '\r', '\n', '\t'], StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+            return words.Length >= 18 &&
+                   words.GroupBy(word => word, StringComparer.OrdinalIgnoreCase).Any(group => group.Count() / (double)words.Length > 0.55);
         }
     }
 }

@@ -32,7 +32,7 @@ public sealed class NeuralChatModel(
             tokenizer.Encode(content).Count));
     }
 
-    private static string BuildPrompt(IReadOnlyList<ChatMessage> messages)
+    internal static string BuildPrompt(IReadOnlyList<ChatMessage> messages)
     {
         var builder = new StringBuilder();
         foreach (var message in messages)

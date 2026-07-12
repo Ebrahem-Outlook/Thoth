@@ -59,6 +59,7 @@ public sealed record ModelCheckpointMetadata(
     public const int CurrentMetadataVersion = 1;
     public const string LegacyRecurrentArchitecture = "legacy-recurrent-rnn-v1";
     public const string TransformerArchitecture = "decoder-only-transformer-v1";
+    public const string TorchTransformerArchitecture = "torch-decoder-only-transformer-v1";
     public const string ByteTokenizer = "byte-v1";
     public const string BpeTokenizer = "bpe-v1";
     public const string CurrentArchitecture = LegacyRecurrentArchitecture;
@@ -93,6 +94,25 @@ public sealed record ModelCheckpointMetadata(
             TransformerCheckpoint.CurrentFormat,
             TransformerCheckpoint.CurrentFormatVersion,
             TransformerArchitecture,
+            tokenizer,
+            ModelCheckpointQualityGate.HashConfig(model.Config),
+            model.OptimizerStep,
+            DateTimeOffset.UtcNow,
+            datasetManifestPath,
+            evaluationReportPath,
+            metrics);
+
+    public static ModelCheckpointMetadata CreateUnqualified(
+        TorchTransformerLanguageModel model,
+        string? datasetManifestPath = null,
+        string? evaluationReportPath = null,
+        CheckpointEvaluationMetrics? metrics = null,
+        string tokenizer = BpeTokenizer) =>
+        new(
+            CurrentMetadataVersion,
+            TorchTransformerCheckpoint.CurrentFormat,
+            TorchTransformerCheckpoint.CurrentFormatVersion,
+            TorchTransformerArchitecture,
             tokenizer,
             ModelCheckpointQualityGate.HashConfig(model.Config),
             model.OptimizerStep,
@@ -255,6 +275,24 @@ public static class ModelCheckpointQualityGate
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     }
 
+    public static string HashConfig(TorchTransformerConfig config)
+    {
+        var value = string.Join(
+            ':',
+            config.VocabularySize,
+            config.ContextLength,
+            config.LayerCount,
+            config.Width,
+            config.HeadCount,
+            config.FeedForwardSize,
+            config.Dropout.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+            config.Seed,
+            config.PaddingToken,
+            config.Device,
+            config.TieOutputEmbeddings);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+    }
+
     private static async Task<CheckpointIdentity> LoadIdentityAsync(
         string checkpointPath,
         CancellationToken cancellationToken)
@@ -285,9 +323,23 @@ public static class ModelCheckpointQualityGate
             }
             catch (InvalidDataException transformerException)
             {
-                throw new InvalidDataException(
-                    $"Unsupported checkpoint format. Legacy loader: {recurrentException.Message}; Transformer loader: {transformerException.Message}",
-                    transformerException);
+                try
+                {
+                    using var torchTransformer = await TorchTransformerCheckpoint.LoadAsync(checkpointPath, cancellationToken);
+                    return new CheckpointIdentity(
+                        TorchTransformerCheckpoint.CurrentFormat,
+                        TorchTransformerCheckpoint.CurrentFormatVersion,
+                        ModelCheckpointMetadata.TorchTransformerArchitecture,
+                        null,
+                        HashConfig(torchTransformer.Config),
+                        torchTransformer.OptimizerStep);
+                }
+                catch (InvalidDataException torchTransformerException)
+                {
+                    throw new InvalidDataException(
+                        $"Unsupported checkpoint format. Legacy loader: {recurrentException.Message}; Transformer loader: {transformerException.Message}; Torch Transformer loader: {torchTransformerException.Message}",
+                        torchTransformerException);
+                }
             }
         }
     }
@@ -319,7 +371,7 @@ public static class ModelCheckpointQualityGate
             reasons.Add($"tokenizer {metadata.Tokenizer} is not compatible");
         }
 
-        if (metadata.Architecture == ModelCheckpointMetadata.TransformerArchitecture &&
+        if (metadata.Architecture is ModelCheckpointMetadata.TransformerArchitecture or ModelCheckpointMetadata.TorchTransformerArchitecture &&
             metadata.Tokenizer is not ModelCheckpointMetadata.ByteTokenizer and not ModelCheckpointMetadata.BpeTokenizer)
         {
             reasons.Add($"tokenizer {metadata.Tokenizer} is not compatible");

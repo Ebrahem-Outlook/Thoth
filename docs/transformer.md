@@ -33,6 +33,10 @@ The pinned dependency is `TorchSharp-cpu` `0.107.0`.
 
 `TorchTransformerTextGenerator` supports greedy or seeded sampling, top-k/top-p, repetition penalty, stop tokens/sequences, cancellation, and a streaming token callback. `TorchTransformerGenerationCache` currently stores token history for deterministic replay/truncation; it is a cache contract, not yet an optimized per-layer KV tensor cache.
 
+## Hybrid Runtime
+
+The runtime can load qualified legacy RNN, C# Transformer, and Torch Transformer checkpoints through the checkpoint quality gate. It falls back to the deterministic self-contained model when a checkpoint is missing, experimental, unqualified, fails to load, emits empty/degenerate text, or leaks internal diagnostics. `/api/system/status` and `/api/model/status` expose safe metadata such as architecture, checkpoint hash, tokenizer, dataset hash, passed/failed scores, training step, parameter count, evaluation timestamp, and inference device.
+
 ## Not Complete Yet
 
 This is not a production-qualified Transformer runtime yet. Remaining Phase 6 work includes:

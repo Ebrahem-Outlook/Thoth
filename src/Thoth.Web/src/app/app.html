@@ -450,7 +450,24 @@
             <div><strong>{{ status.conversationCount }}</strong><span>chats</span></div>
             <div><strong>{{ status.memoryCount }}</strong><span>memories</span></div>
             <div><strong>{{ status.shellEnabled ? 'on' : 'off' }}</strong><span>shell</span></div>
+            <div><strong>{{ status.trainingStep ?? 0 }}</strong><span>step</span></div>
+            <div><strong>{{ status.modelParameterCount ?? 'n/a' }}</strong><span>params</span></div>
+            <div><strong>{{ status.inferenceDevice || 'cpu' }}</strong><span>device</span></div>
+            <div><strong>{{ status.passedSuites?.length ?? 0 }}/{{ (status.passedSuites?.length ?? 0) + (status.failedSuites?.length ?? 0) }}</strong><span>scores</span></div>
           </div>
+          @if (status.checkpointHash || status.datasetManifestHash) {
+            <div class="workspace-card compact">
+              @if (status.activeArchitecture) {
+                <p>{{ status.activeArchitecture }}</p>
+              }
+              @if (status.checkpointHash) {
+                <p>checkpoint {{ status.checkpointHash.slice(0, 12) }}</p>
+              }
+              @if (status.datasetManifestHash) {
+                <p>dataset {{ status.datasetManifestHash.slice(0, 12) }}</p>
+              }
+            </div>
+          }
         }
 
         @if (workspaceSummary(); as workspace) {

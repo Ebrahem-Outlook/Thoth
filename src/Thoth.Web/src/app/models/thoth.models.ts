@@ -161,6 +161,18 @@ export interface SystemStatus {
   checkpointState: string;
   qualityQualification: string;
   toolsActive: boolean;
+  activeArchitecture?: string;
+  checkpointHash?: string | null;
+  tokenizer?: string | null;
+  tokenizerHash?: string | null;
+  datasetManifestHash?: string | null;
+  passedSuites?: string[];
+  failedSuites?: string[];
+  trainingStep?: number | null;
+  modelParameterCount?: number | null;
+  lastEvaluationTimestamp?: string | null;
+  inferenceDevice?: string;
+  lastGenerationLatencyMs?: number | null;
 }
 
 export interface MemoryRecord {

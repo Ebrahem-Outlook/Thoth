@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
@@ -12,6 +13,7 @@ using Thoth.Core.Configuration;
 using Thoth.Core.Conversations;
 using Thoth.Core.Memory;
 using Thoth.Core.Tools;
+using Thoth.Model;
 using Thoth.Model.Persistence;
 using Thoth.Runtime;
 
@@ -110,6 +112,7 @@ app.MapGet("/api/system/status", async (
     var conversationCount = (await conversations.ListAsync(limit: 500, cancellationToken: cancellationToken)).Count;
     var memoryCount = (await memory.RecentAsync(limit: 500, cancellationToken: cancellationToken)).Count;
     var modelStatus = await InspectModelAsync(options.Value, cancellationToken);
+    var modelDetails = BuildSafeModelDetails(options.Value, modelStatus);
 
     return Results.Ok(new SystemStatus(
         options.Value.Model.Provider,
@@ -127,7 +130,19 @@ app.MapGet("/api/system/status", async (
         options.Value.Model.Provider,
         modelStatus.Status.ToString(),
         QualityQualification(modelStatus.Status),
-        tools.List().Count > 0));
+        tools.List().Count > 0,
+        modelDetails.ActiveArchitecture,
+        modelDetails.CheckpointHash,
+        modelDetails.Tokenizer,
+        modelDetails.TokenizerHash,
+        modelDetails.DatasetManifestHash,
+        modelDetails.PassedSuites,
+        modelDetails.FailedSuites,
+        modelDetails.TrainingStep,
+        modelDetails.ModelParameterCount,
+        modelDetails.LastEvaluationTimestamp,
+        modelDetails.InferenceDevice,
+        modelDetails.LastGenerationLatencyMs));
 });
 
 app.MapGet("/api/model/status", async (
@@ -135,13 +150,15 @@ app.MapGet("/api/model/status", async (
     CancellationToken cancellationToken) =>
 {
     var status = await InspectModelAsync(options.Value, cancellationToken);
+    var details = BuildSafeModelDetails(options.Value, status);
     return Results.Ok(new
     {
         status = status.Status.ToString(),
         status.CheckpointPath,
         status.MetadataPath,
         status.Reasons,
-        metadata = status.Metadata
+        metadata = status.Metadata,
+        details
     });
 });
 
@@ -446,6 +463,153 @@ static string QualityQualification(ModelCheckpointStatus status) =>
         _ => "unknown"
     };
 
+static SafeModelStatusDetails BuildSafeModelDetails(ThothOptions options, ModelCheckpointInspection status)
+{
+    var metadata = status.Metadata;
+    var scores = metadata?.Metrics?.Scores ?? new Dictionary<string, double>();
+    var passed = scores
+        .Where(item => double.IsFinite(item.Value) && item.Value >= 0.80)
+        .Select(item => item.Key)
+        .Order(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+    var failed = scores
+        .Where(item => !double.IsFinite(item.Value) || item.Value < 0.80)
+        .Select(item => item.Key)
+        .Order(StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    return new SafeModelStatusDetails(
+        metadata?.Architecture ?? "self-contained-fallback",
+        TryHashPath(status.CheckpointPath),
+        metadata?.Tokenizer,
+        TryHashPath(options.Model.TokenizerPath),
+        TryHashPath(metadata?.DatasetManifestPath),
+        passed,
+        failed,
+        metadata?.OptimizerStep,
+        TryReadParameterCount(status),
+        TryGetLastWriteTime(metadata?.EvaluationReportPath),
+        ResolveInferenceDevice(status),
+        null);
+}
+
+static string? TryHashPath(string? path)
+{
+    if (string.IsNullOrWhiteSpace(path) ||
+        path.Equals("byte", StringComparison.OrdinalIgnoreCase))
+    {
+        return null;
+    }
+
+    try
+    {
+        var fullPath = Path.GetFullPath(path);
+        if (Directory.Exists(fullPath))
+        {
+            return HashDirectory(fullPath);
+        }
+
+        if (!File.Exists(fullPath))
+        {
+            return null;
+        }
+
+        using var sha = SHA256.Create();
+        using var stream = File.OpenRead(fullPath);
+        return Convert.ToHexString(sha.ComputeHash(stream)).ToLowerInvariant();
+    }
+    catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+    {
+        return null;
+    }
+}
+
+static string HashDirectory(string path)
+{
+    using var sha = SHA256.Create();
+    foreach (var file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories)
+                 .Order(StringComparer.OrdinalIgnoreCase))
+    {
+        var relative = Path.GetRelativePath(path, file).Replace('\\', '/');
+        var nameBytes = Encoding.UTF8.GetBytes(relative);
+        sha.TransformBlock(nameBytes, 0, nameBytes.Length, null, 0);
+        sha.TransformBlock([0], 0, 1, null, 0);
+        var content = File.ReadAllBytes(file);
+        sha.TransformBlock(content, 0, content.Length, null, 0);
+    }
+
+    sha.TransformFinalBlock([], 0, 0);
+    return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
+}
+
+static DateTimeOffset? TryGetLastWriteTime(string? path)
+{
+    if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+    {
+        return null;
+    }
+
+    return File.GetLastWriteTimeUtc(path);
+}
+
+static long? TryReadParameterCount(ModelCheckpointInspection status)
+{
+    if (status.Metadata is null || !File.Exists(status.CheckpointPath))
+    {
+        return null;
+    }
+
+    try
+    {
+        const long maximumStatusLoadBytes = 200L * 1024L * 1024L;
+        if (new FileInfo(status.CheckpointPath).Length > maximumStatusLoadBytes)
+        {
+            return null;
+        }
+
+        return status.Metadata.Architecture switch
+        {
+            ModelCheckpointMetadata.LegacyRecurrentArchitecture =>
+                ModelCheckpoint.LoadAsync(status.CheckpointPath).GetAwaiter().GetResult().ParameterCount,
+            ModelCheckpointMetadata.TransformerArchitecture =>
+                TransformerCheckpoint.LoadAsync(status.CheckpointPath).GetAwaiter().GetResult().ParameterCount,
+            ModelCheckpointMetadata.TorchTransformerArchitecture =>
+                ReadTorchParameterCount(status.CheckpointPath),
+            _ => null
+        };
+    }
+    catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+    {
+        return null;
+    }
+}
+
+static long? ReadTorchParameterCount(string checkpointPath)
+{
+    using var model = TorchTransformerCheckpoint.LoadAsync(checkpointPath).GetAwaiter().GetResult();
+    return model.ParameterCount;
+}
+
+static string ResolveInferenceDevice(ModelCheckpointInspection status)
+{
+    if (status.Metadata?.Architecture == ModelCheckpointMetadata.TorchTransformerArchitecture &&
+        File.Exists(status.CheckpointPath) &&
+        new FileInfo(status.CheckpointPath).Length <= 200L * 1024L * 1024L)
+    {
+        try
+        {
+            using var model = TorchTransformerCheckpoint.LoadAsync(status.CheckpointPath).GetAwaiter().GetResult();
+            return model.Config.Device;
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or UnauthorizedAccessException)
+        {
+            return "cpu";
+        }
+    }
+
+    return "cpu";
+}
+
 static ChatResponseDto ToDto(ChatTurnResult result) =>
     new(
         result.Conversation.Conversation.Id,
@@ -711,6 +875,20 @@ public sealed record RunRequest(
     bool? DryRun);
 
 public sealed record MemoryWriteRequest(string Content, string? Scope);
+
+public sealed record SafeModelStatusDetails(
+    string ActiveArchitecture,
+    string? CheckpointHash,
+    string? Tokenizer,
+    string? TokenizerHash,
+    string? DatasetManifestHash,
+    IReadOnlyList<string> PassedSuites,
+    IReadOnlyList<string> FailedSuites,
+    long? TrainingStep,
+    long? ModelParameterCount,
+    DateTimeOffset? LastEvaluationTimestamp,
+    string InferenceDevice,
+    double? LastGenerationLatencyMs);
 
 public sealed record ParsedChatRequest(
     Guid? ConversationId,

@@ -160,6 +160,7 @@ export class App implements OnInit, OnDestroy {
     const qualified = this.isCheckpointQualified(status.checkpointState || status.modelStatus);
     const chips: StatusChip[] = [
       { label: 'Provider', value: status.activeProvider || status.runtimeMode, tone: 'neutral' },
+      { label: 'Arch', value: status.activeArchitecture || 'self-contained', tone: 'neutral' },
       { label: 'Checkpoint', value: status.checkpointState || status.modelStatus, tone: qualified ? 'ok' : 'warn' },
       { label: 'Quality', value: status.qualityQualification || 'unknown', tone: qualified ? 'ok' : 'warn' },
       { label: 'Tools', value: this.useTools() && status.toolsActive ? 'active' : 'off', tone: this.useTools() && status.toolsActive ? 'ok' : 'warn' },

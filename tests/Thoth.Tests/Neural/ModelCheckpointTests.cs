@@ -123,4 +123,32 @@ public sealed class ModelCheckpointTests
         Assert.Equal(ModelCheckpointStatus.QualifiedForAgentDecisions, agent.Status);
         Assert.True(agent.CanUse(ModelRole.AgentDecision));
     }
+
+    [Fact]
+    public async Task QualityGate_RecognizesTorchTransformerAsExperimentalCheckpoint()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "thoth-tests", Guid.NewGuid().ToString("N"), "torch-transformer.bin");
+        using var model = new TorchTransformerLanguageModel(new TorchTransformerConfig(
+            VocabularySize: 64,
+            ContextLength: 8,
+            LayerCount: 1,
+            Width: 16,
+            HeadCount: 2,
+            FeedForwardSize: 32,
+            Dropout: 0,
+            Seed: 23,
+            PaddingToken: 0,
+            Device: "cpu"));
+        model.TrainBatch(
+            new long[,] { { 1, 2, 3, 4 } },
+            new long[,] { { 2, 3, 4, 5 } },
+            0.001);
+
+        await TorchTransformerCheckpoint.SaveAsync(path, model);
+        var inspection = await ModelCheckpointQualityGate.InspectAsync(path);
+
+        Assert.Equal(ModelCheckpointStatus.ExperimentalOnly, inspection.Status);
+        Assert.Equal(ModelCheckpointMetadata.TorchTransformerArchitecture, inspection.Metadata?.Architecture);
+        Assert.False(inspection.CanUse(ModelRole.Generation));
+    }
 }

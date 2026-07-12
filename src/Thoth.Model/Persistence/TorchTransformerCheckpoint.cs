@@ -7,6 +7,10 @@ public static class TorchTransformerCheckpoint
     private const string Magic = "THOTH-TORCH-TRANSFORMER";
     private const int FormatVersion = 1;
 
+    public const string CurrentFormat = Magic;
+
+    public const int CurrentFormatVersion = FormatVersion;
+
     public static async Task SaveAsync(
         string path,
         TorchTransformerLanguageModel model,
@@ -48,6 +52,10 @@ public static class TorchTransformerCheckpoint
             }
 
             File.Move(temporaryPath, fullPath, overwrite: true);
+            await ModelCheckpointQualityGate.SaveMetadataAsync(
+                fullPath,
+                ModelCheckpointMetadata.CreateUnqualified(model),
+                cancellationToken);
         }
         finally
         {

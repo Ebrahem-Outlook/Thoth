@@ -165,4 +165,16 @@ public sealed record SystemStatus(
     string ActiveProvider,
     string CheckpointState,
     string QualityQualification,
-    bool ToolsActive);
+    bool ToolsActive,
+    string ActiveArchitecture,
+    string? CheckpointHash,
+    string? Tokenizer,
+    string? TokenizerHash,
+    string? DatasetManifestHash,
+    IReadOnlyList<string> PassedSuites,
+    IReadOnlyList<string> FailedSuites,
+    long? TrainingStep,
+    long? ModelParameterCount,
+    DateTimeOffset? LastEvaluationTimestamp,
+    string InferenceDevice,
+    double? LastGenerationLatencyMs);

@@ -22,6 +22,8 @@ public sealed class ModelOptions
 
     public string CheckpointPath { get; set; } = Path.Combine("data", "models", "thoth-bootstrap.bin");
 
+    public string TokenizerPath { get; set; } = string.Empty;
+
     public double Temperature { get; set; } = 0.8;
 
     public int MaxNewTokens { get; set; } = 256;
