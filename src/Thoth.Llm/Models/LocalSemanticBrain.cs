@@ -206,25 +206,8 @@ internal static class LocalSemanticBrain
     {
         var signal = AnalyzeGoal(goal);
         var insights = AnalyzeObservations(goal, observations);
-        var builder = new StringBuilder();
-
-        builder.AppendLine(signal.Topic == "research"
-            ? signal.Language == "ar"
-                ? "\u0641\u0627\u0647\u0645\u0643. \u0643\u0633\u0631\u062a \u0627\u0644\u0637\u0644\u0628\u060c \u0628\u062d\u062b\u062a \u0639\u0644\u0649 \u0627\u0644\u0648\u064a\u0628\u060c \u0648\u0642\u0631\u0623\u062a \u0627\u0644\u0645\u0635\u0627\u062f\u0631 \u0642\u0628\u0644 \u0627\u0644\u0645\u0644\u062e\u0635."
-                : "I broke the request down, searched the web, read sources, and then formed the answer."
-            : signal.Language == "ar"
-                ? "\u0641\u0627\u0647\u0645\u0643. \u0643\u0633\u0631\u062a \u0627\u0644\u0637\u0644\u0628 \u0644\u062a\u0635\u0646\u064a\u0641 \u0645\u062d\u0644\u064a\u060c \u0648\u0641\u062d\u0635\u062a \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0648\u0627\u0644\u0623\u062f\u0648\u0627\u062a \u0642\u0628\u0644 \u0645\u0627 \u0623\u0631\u062f."
-                : "I broke the request down locally, checked the workspace evidence, and then formed the answer.");
-        builder.AppendLine();
-        AppendUnderstanding(builder, signal);
-
-        builder.AppendLine();
-        AppendFindings(builder, signal, insights);
-        AppendEvidence(builder, signal, insights);
-        AppendToolSummary(builder, signal, insights);
-        AppendNextMove(builder, signal, insights);
-
-        return RefineEvidenceAnswer(goal, builder.ToString(), signal, insights).Trim();
+        var answer = ComposeEvidenceAnswer(signal, insights);
+        return RefineEvidenceAnswer(goal, answer, signal, insights).Trim();
     }
 
     public static string BuildDirectReply(string text, bool hasImage)
@@ -243,6 +226,87 @@ internal static class LocalSemanticBrain
         }
 
         return answer.Trim();
+    }
+
+    private static string ComposeEvidenceAnswer(BrainSignal signal, ObservationInsights insights)
+    {
+        var rows = new List<string>
+        {
+            Field(signal, "request", signal.Summary),
+            Field(signal, "intent", $"{signal.Topic}/{signal.Action} {signal.Confidence:0.00}")
+        };
+
+        foreach (var item in BuildFindingItems(signal, insights).Take(10))
+        {
+            rows.Add(Field(signal, "evidence", item));
+        }
+
+        if (insights.ToolNames.Count > 0)
+        {
+            rows.Add(Field(signal, "tools", string.Join(", ", insights.ToolNames.Take(8))));
+        }
+
+        rows.Add(Field(signal, "next", BuildNextActionToken(signal, insights)));
+        return string.Join(Environment.NewLine, rows);
+    }
+
+    private static IEnumerable<string> BuildFindingItems(BrainSignal signal, ObservationInsights insights)
+    {
+        if (signal.Topic == "backend" && insights.Routes.Count > 0)
+        {
+            yield return $"routes:{insights.Routes.Count}";
+            foreach (var group in GroupRoutes(insights.Routes).Take(8))
+            {
+                yield return $"{group.Key}:{string.Join(",", group.Value.Take(8))}";
+            }
+        }
+
+        if (signal.Topic == "model")
+        {
+            foreach (var symbol in insights.Symbols.Where(symbol => ContainsAny(symbol, "Model", "Engine", "Planner", "Understanding", "Orchestrator")).Take(8))
+            {
+                yield return $"symbol:{symbol}";
+            }
+        }
+
+        if (signal.Topic == "frontend")
+        {
+            foreach (var file in insights.Files.Where(file => file.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".html", StringComparison.OrdinalIgnoreCase) || file.EndsWith(".scss", StringComparison.OrdinalIgnoreCase)).Take(8))
+            {
+                yield return $"ui-file:{file}";
+            }
+        }
+
+        foreach (var failure in insights.Failures.Take(5))
+        {
+            yield return $"problem:{failure}";
+        }
+
+        foreach (var evidence in insights.Evidence.Where(line => !line.StartsWith("Workspace:", StringComparison.OrdinalIgnoreCase)).Take(8))
+        {
+            yield return SingleLine(evidence, 220);
+        }
+
+        if (insights.Routes.Count == 0 && insights.Evidence.Count == 0 && insights.Failures.Count == 0 && insights.Files.Count == 0)
+        {
+            yield return $"evidence-gap:{signal.Topic}/{signal.Action}";
+        }
+    }
+
+    private static string BuildNextActionToken(BrainSignal signal, ObservationInsights insights)
+    {
+        var basis = signal.Topic switch
+        {
+            "backend" => insights.Routes.Count > 0 ? "endpoint-contract-test" : "route-read",
+            "frontend" => insights.Files.Count > 0 ? "component-state-browser-check" : "ui-file-read",
+            "model" => "pattern-bank-regression",
+            "research" => insights.Evidence.Count > 1 ? "source-compare-cite" : "source-expand",
+            "debugging" => insights.Failures.Count > 0 ? "reproduce-first-failure" : "trace-failure",
+            "testing" => "smallest-test-then-coverage",
+            _ => $"{signal.Topic}-{signal.Action}"
+        };
+
+        return $"{basis}:{string.Join(",", signal.Keywords.Take(4))}";
     }
 
     private static CognitiveFrame BuildCognitiveFrame(string text, bool hasImage)
@@ -265,77 +329,133 @@ internal static class LocalSemanticBrain
 
     private static string DraftDirectAnswer(CognitiveFrame frame)
     {
-        var arabic = frame.Signal.Language == "ar";
-        var builder = new StringBuilder();
-
-        builder.AppendLine(arabic ? "\u062a\u0641\u0643\u064a\u0643 recursive:" : "Recursive parse:");
-        builder.AppendLine(arabic
-            ? $"- \u0627\u0644\u0637\u0644\u0628: {SingleLine(frame.Text, 180)}"
-            : $"- Request: {SingleLine(frame.Text, 180)}");
-        builder.AppendLine(arabic
-            ? $"- \u0627\u0644\u0645\u0648\u0636\u0648\u0639/\u0627\u0644\u0641\u0639\u0644: {frame.Signal.Topic} / {frame.Signal.Action} ({frame.Signal.Confidence:0.00})"
-            : $"- Topic/action: {frame.Signal.Topic} / {frame.Signal.Action} ({frame.Signal.Confidence:0.00})");
-
-        if (frame.Clauses.Count > 0)
+        var rows = new List<string>
         {
-            builder.AppendLine(arabic
-                ? $"- \u0627\u0644\u0623\u062c\u0632\u0627\u0621: {string.Join(" | ", frame.Clauses.Select(clause => SingleLine(clause, 90)))}"
-                : $"- Clauses: {string.Join(" | ", frame.Clauses.Select(clause => SingleLine(clause, 90)))}");
+            Field(frame.Signal, "request", SingleLine(frame.Text, 180)),
+            Field(frame.Signal, "intent", $"{frame.Signal.Topic}/{frame.Signal.Action} {frame.Signal.Confidence:0.00}")
+        };
+
+        if (frame.Clauses.Count > 1)
+        {
+            rows.Add(Field(frame.Signal, "parts", string.Join(" | ", frame.Clauses.Select(clause => SingleLine(clause, 90)))));
         }
 
         if (frame.FocusTerms.Count > 0)
         {
-            builder.AppendLine(arabic
-                ? $"- \u0643\u0644\u0645\u0627\u062a \u0645\u062d\u0648\u0631\u064a\u0629: {string.Join(", ", frame.FocusTerms.Take(6))}"
-                : $"- Focus terms: {string.Join(", ", frame.FocusTerms.Take(6))}");
+            rows.Add(Field(frame.Signal, "terms", string.Join(", ", frame.FocusTerms.Take(7))));
         }
 
         if (frame.Constraints.Count > 0)
         {
-            builder.AppendLine(arabic
-                ? $"- \u0642\u064a\u0648\u062f: {string.Join(" | ", frame.Constraints.Select(item => SingleLine(item, 90)))}"
-                : $"- Constraints: {string.Join(" | ", frame.Constraints.Select(item => SingleLine(item, 90)))}");
+            rows.Add(Field(frame.Signal, "constraints", string.Join(" | ", frame.Constraints.Select(item => SingleLine(item, 90)))));
         }
 
-        builder.AppendLine(arabic
-            ? $"- \u064a\u062d\u062a\u0627\u062c \u0623\u062f\u0648\u0627\u062a: {(frame.Signal.RequiresTools ? "\u0646\u0639\u0645" : "\u0644\u0627")}"
-            : $"- Needs tools: {(frame.Signal.RequiresTools ? "yes" : "no")}");
+        rows.Add(Field(frame.Signal, "route", string.Join(" -> ", BuildDirectRoute(frame))));
 
         if (frame.HasImage)
         {
-            builder.AppendLine(arabic
-                ? "- \u0641\u064a\u0647 \u0645\u0631\u0641\u0642 \u0635\u0648\u0631\u0629: \u0623\u062d\u062a\u0627\u062c \u0637\u0628\u0642\u0629 \u0631\u0624\u064a\u0629 \u0645\u062d\u0644\u064a\u0629 \u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u0628\u0643\u0633\u0644\u0627\u062a."
-                : "- Image attached: pixel-level reading needs the local vision layer.");
+            rows.Add(Field(frame.Signal, "attachment", frame.Signal.Language == "ar"
+                ? "\u0635\u0648\u0631\u0629:\u0631\u0624\u064a\u0629-\u0645\u062d\u0644\u064a\u0629"
+                : "image:local-vision"));
         }
 
-        builder.AppendLine();
-        builder.AppendLine(arabic ? "\u0627\u0644\u0631\u062f \u0628\u0639\u062f \u0623\u0648\u0644 \u0635\u064a\u0627\u063a\u0629:" : "Draft answer:");
-        builder.AppendLine(BuildAnswerCore(frame));
-
-        return builder.ToString().Trim();
+        return string.Join(Environment.NewLine, rows);
     }
 
-    private static string BuildAnswerCore(CognitiveFrame frame)
+    private static IReadOnlyList<string> BuildDirectRoute(CognitiveFrame frame)
     {
-        var arabic = frame.Signal.Language == "ar";
-        return frame.QuestionKind switch
+        var route = new List<string>
         {
-            "capability" => arabic
-                ? "\u0623\u0642\u062f\u0631 \u0623\u0634\u062a\u063a\u0644 \u0643\u0640 agent \u0645\u062d\u0644\u064a: \u0623\u0641\u0647\u0645 \u0627\u0644\u0637\u0644\u0628\u060c \u0623\u0642\u0633\u0645\u0647 \u0644\u0623\u062c\u0632\u0627\u0621\u060c \u0623\u0633\u062a\u062e\u062f\u0645 \u0627\u0644\u0630\u0627\u0643\u0631\u0629 \u0648\u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0648\u0627\u0644\u0648\u064a\u0628 \u0644\u0645\u0627 \u0627\u0644\u0623\u062f\u0648\u0627\u062a \u062a\u0643\u0648\u0646 \u0645\u062a\u0627\u062d\u0629\u060c \u062b\u0645 \u0623\u0631\u0627\u062c\u0639 \u0627\u0644\u0631\u062f \u0642\u0628\u0644 \u0645\u0627 \u0623\u0631\u062c\u0639\u0647."
-                : "I can work as a local agent: parse the request, split it into parts, use memory/files/web when tools are available, then review the answer before returning it.",
-            "code" => arabic
-                ? "\u062f\u0647 \u0637\u0644\u0628 \u0643\u0648\u062f. \u0627\u0644\u0639\u0642\u0644 \u0647\u064a\u0628\u0646\u064a \u0639\u0642\u062f \u0627\u0644\u0645\u064a\u062b\u0648\u062f \u0623\u0648\u0644\u0627: \u0627\u0644\u0627\u0633\u0645\u060c \u0627\u0644\u0645\u062f\u062e\u0644\u0627\u062a\u060c \u0627\u0644\u062e\u0631\u062c\u060c \u0648\u0642\u0648\u0627\u0639\u062f validation. \u0645\u0646 \u063a\u064a\u0631 \u0627\u0644\u0645\u0648\u0627\u0635\u0641\u0627\u062a \u062f\u064a \u0645\u0634 \u0647\u0631\u0645\u064a \u0642\u0627\u0644\u0628 \u0645\u062d\u0641\u0648\u0638\u061b \u0647\u0637\u0644\u0628 \u0627\u0644\u0646\u0627\u0642\u0635 \u0623\u0648 \u0623\u0628\u0646\u064a \u0623\u0635\u063a\u0631 \u0639\u0642\u062f \u0622\u0645\u0646."
-                : "This is a code request. The brain should build the method contract first: name, inputs, output, and validation rules. Without that contract I should not throw a saved template at you; I should ask for the missing parts or derive the smallest safe contract.",
-            "research" => arabic
-                ? "\u062f\u0647 \u0645\u062d\u062a\u0627\u062c \u0628\u062d\u062b \u0641\u0639\u0644\u064a: \u0623\u062d\u062f\u062f \u0643\u0644\u0645\u0627\u062a \u0627\u0644\u0628\u062d\u062b\u060c \u0623\u0642\u0631\u0623 \u0645\u0635\u0627\u062f\u0631\u060c \u0623\u0644\u062e\u0635 \u0627\u0644\u0646\u0642\u0627\u0637\u060c \u0648\u0623\u0631\u0627\u062c\u0639 \u0627\u0644\u0645\u0644\u062e\u0635 \u0642\u0628\u0644 \u0627\u0644\u0631\u062f. \u0644\u0648 Tools \u0645\u0641\u0639\u0644\u0629 \u0647\u064a\u062a\u0646\u0641\u0630 web.research \u0628\u062f\u0644 \u0627\u0644\u062a\u062e\u0645\u064a\u0646."
-                : "This needs real research: choose search terms, read sources, summarize the points, and review the summary before answering. With tools enabled, this should call web.research instead of guessing.",
-            "tool" => arabic
-                ? "\u062f\u0647 \u0645\u0631\u062a\u0628\u0637 \u0628\u0633\u064a\u0627\u0642 \u0623\u0648 \u0645\u0634\u0631\u0648\u0639. \u0627\u0644\u0645\u0633\u0627\u0631 \u0627\u0644\u0635\u062d: \u0623\u0642\u0631\u0623 \u0627\u0644\u0645\u0644\u0641\u0627\u062a/\u0627\u0644\u0630\u0627\u0643\u0631\u0629/\u0627\u0644\u0623\u062f\u0648\u0627\u062a\u060c \u0623\u0633\u062a\u062e\u0631\u062c \u0627\u0644\u062f\u0644\u064a\u0644\u060c \u0623\u0628\u0646\u064a \u062e\u0637\u0629 \u0635\u063a\u064a\u0631\u0629\u060c \u062b\u0645 \u0623\u0631\u062f \u0628\u062a\u0634\u062e\u064a\u0635 \u0623\u0648 \u062a\u0646\u0641\u064a\u0630."
-                : "This is context-bound. The right path is to read files/memory/tools, extract evidence, build a small plan, then answer with diagnosis or implementation.",
-            _ => arabic
-                ? $"\u0623\u0646\u0627 \u0645\u062a\u0627\u0628\u0639 \u0645\u0639\u0646\u0649 \u0643\u0644\u0627\u0645\u0643: {frame.Signal.Summary}. \u0647\u0631\u062f \u0639\u0644\u0649 \u0627\u0644\u0645\u0639\u0646\u0649 \u0627\u0644\u0645\u062a\u0641\u0647\u0645\u060c \u0648\u0644\u0648 \u0628\u0642\u0649 \u0641\u064a\u0647 \u0647\u062f\u0641 \u062a\u0646\u0641\u064a\u0630\u064a \u0647\u0643\u0633\u0631\u0647 \u0644\u062e\u0637\u0648\u0627\u062a."
-                : $"I am tracking the meaning of your message: {frame.Signal.Summary}. I will answer the understood intent, and if it becomes an implementation target I will break it into steps."
+            $"parse:{string.Join("+", frame.Clauses.Take(3).Select(clause => string.Join("-", ExtractKeywords(clause, 3))))}",
+            $"classify:{frame.Signal.Topic}/{frame.Signal.Action}"
         };
+
+        if (frame.QuestionKind == "code")
+        {
+            route.Add($"contract:{string.Join(",", CodeContractSlots(frame))}");
+        }
+
+        if (frame.QuestionKind == "research")
+        {
+            route.Add($"web:{string.Join(",", frame.FocusTerms.Take(4))}");
+            route.Add("sources:read");
+        }
+
+        if (frame.Signal.RequiresTools)
+        {
+            route.Add($"tools:{ToolRouteName(frame.Signal)}");
+        }
+
+        if (frame.QuestionKind == "capability")
+        {
+            route.Add($"capabilities:{string.Join(",", InferCapabilityTokens(frame))}");
+        }
+
+        if (frame.QuestionKind is "general" or "conversation" or "understanding")
+        {
+            route.Add($"answer:{SingleLine(frame.Signal.Summary, 80)}");
+        }
+
+        route.Add("revise:semantic-fit");
+        return route;
+    }
+
+    private static IReadOnlyList<string> CodeContractSlots(CognitiveFrame frame)
+    {
+        var slots = new List<string>();
+        if (!frame.FocusTerms.Any(term => term.Contains("name", StringComparison.OrdinalIgnoreCase) || term.Contains("\u0627\u0633\u0645", StringComparison.OrdinalIgnoreCase)))
+        {
+            slots.Add("name");
+        }
+
+        slots.Add("inputs");
+        slots.Add("output");
+        slots.Add("validation");
+        return slots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static IReadOnlyList<string> InferCapabilityTokens(CognitiveFrame frame)
+    {
+        var tokens = new List<string> { "parse", "rank", "act", "review" };
+        if (frame.FocusTerms.Any(term => ContainsAny(term, "file", "project", "repo", "workspace")))
+        {
+            tokens.Add("workspace");
+        }
+
+        tokens.Add("web");
+        tokens.Add("memory");
+        return tokens.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+    }
+
+    private static string ToolRouteName(BrainSignal signal) =>
+        signal.Topic switch
+        {
+            "research" => "web.research",
+            "frontend" or "backend" or "model" or "workspace" or "debugging" => "workspace+file",
+            _ => signal.RequiresTools ? "agent-tools" : "none"
+        };
+
+    private static string Field(BrainSignal signal, string key, string value)
+    {
+        var label = signal.Language == "ar"
+            ? key switch
+            {
+                "request" => "\u0637\u0644\u0628",
+                "intent" => "\u0646\u064a\u0629",
+                "parts" => "\u0623\u062c\u0632\u0627\u0621",
+                "terms" => "\u0643\u0644\u0645\u0627\u062a",
+                "constraints" => "\u0642\u064a\u0648\u062f",
+                "route" => "\u0645\u0633\u0627\u0631",
+                "attachment" => "\u0645\u0631\u0641\u0642",
+                "evidence" => "\u062f\u0644\u064a\u0644",
+                "tools" => "\u0623\u062f\u0648\u0627\u062a",
+                "next" => "\u062a\u0627\u0644\u064a",
+                "revision" => "\u062a\u062d\u0633\u064a\u0646",
+                _ => key
+            }
+            : key;
+
+        return $"{label}: {value}";
     }
 
     private static CognitiveCritique CritiqueDraft(CognitiveFrame frame, string answer)
@@ -384,95 +504,55 @@ internal static class LocalSemanticBrain
 
     private static string ImproveDraft(CognitiveFrame frame, string answer, CognitiveCritique critique, int cycle)
     {
-        var arabic = frame.Signal.Language == "ar";
-        var builder = new StringBuilder(answer.Trim());
-        builder.AppendLine();
-        builder.AppendLine();
-
         if (critique.Issues.Count == 0)
         {
-            builder.AppendLine(arabic
-                ? $"\u0645\u0631\u0627\u062c\u0639\u0629 recursive {cycle}: \u0627\u0644\u0635\u064a\u0627\u063a\u0629 \u0645\u062a\u0645\u0627\u0633\u0643\u0629\u060c \u0648\u0627\u0644\u0631\u062f \u0645\u0631\u062a\u0628\u0637 \u0628\u0627\u0644\u0641\u0647\u0645 \u0645\u0634 \u0628\u0642\u0627\u0644\u0628 \u0645\u062d\u0641\u0648\u0638."
-                : $"Recursive self-check {cycle}: the answer is coherent and tied to the parsed intent, not a saved template.");
-            return builder.ToString().Trim();
+            return answer.Trim();
         }
 
-        builder.AppendLine(arabic
-            ? $"\u0645\u0631\u0627\u062c\u0639\u0629 recursive {cycle}: \u0627\u062a\u0644\u0642\u0637 {critique.Issues.Count} \u0646\u0642\u0637\u0629 \u0648\u0627\u062a\u0635\u0644\u062d\u062a \u0641\u064a \u0627\u0644\u0635\u064a\u0627\u063a\u0629."
-            : $"Recursive self-check {cycle}: found {critique.Issues.Count} issue(s) and patched the wording.");
-
-        foreach (var issue in critique.Issues)
-        {
-            builder.AppendLine(arabic
-                ? $"- \u062a\u0635\u062d\u064a\u062d: {DescribeIssue(issue, true, frame)}"
-                : $"- Patch: {DescribeIssue(issue, false, frame)}");
-        }
-
-        return builder.ToString().Trim();
+        var revisions = critique.Issues
+            .Select(issue => DescribeIssue(issue, frame))
+            .Distinct(StringComparer.OrdinalIgnoreCase);
+        return $"{answer.Trim()}{Environment.NewLine}{Field(frame.Signal, "revision", $"{cycle}:{string.Join(",", revisions)}")}";
     }
 
-    private static string DescribeIssue(string issue, bool arabic, CognitiveFrame frame) =>
+    private static string DescribeIssue(string issue, CognitiveFrame frame) =>
         issue switch
         {
-            "classification_not_visible" => arabic
-                ? $"\u0627\u0644\u062a\u0635\u0646\u064a\u0641 \u0647\u0648 {frame.Signal.Topic}/{frame.Signal.Action}."
-                : $"The classification is {frame.Signal.Topic}/{frame.Signal.Action}.",
-            "focus_terms_missing" => arabic
-                ? $"\u0627\u0644\u0643\u0644\u0645\u0627\u062a \u0627\u0644\u0645\u062d\u0648\u0631\u064a\u0629: {string.Join(", ", frame.FocusTerms.Take(5))}."
-                : $"Focus terms: {string.Join(", ", frame.FocusTerms.Take(5))}.",
-            "image_not_acknowledged" => arabic
-                ? "\u0627\u0644\u0631\u0633\u0627\u0644\u0629 \u0641\u064a\u0647\u0627 \u0635\u0648\u0631\u0629 \u0645\u0631\u0641\u0642\u0629 \u0648\u062a\u062d\u062a\u0627\u062c \u0642\u0631\u0627\u0621\u0629 \u0631\u0624\u064a\u0629."
-                : "The message includes an image attachment that needs vision reading.",
-            "tool_path_missing" => arabic
-                ? "\u0627\u0644\u0637\u0644\u0628 \u064a\u062d\u062a\u0627\u062c \u0623\u062f\u0648\u0627\u062a: \u0645\u0644\u0641\u0627\u062a\u060c \u0630\u0627\u0643\u0631\u0629\u060c \u0623\u0648 \u0648\u064a\u0628 \u062d\u0633\u0628 \u0627\u0644\u0633\u064a\u0627\u0642."
-                : "The request needs tools: files, memory, or web depending on context.",
-            "code_contract_missing" => arabic
-                ? "\u0639\u0642\u062f \u0627\u0644\u0643\u0648\u062f \u0644\u0627\u0632\u0645 \u064a\u062d\u062f\u062f \u0627\u0644\u0627\u0633\u0645\u060c \u0627\u0644\u0645\u062f\u062e\u0644\u0627\u062a\u060c \u0627\u0644\u062e\u0631\u062c\u060c \u0648\u0642\u0648\u0627\u0639\u062f validation."
-                : "The code contract needs name, inputs, output, and validation rules.",
-            "research_path_missing" => arabic
-                ? "\u0627\u0644\u0628\u062d\u062b \u0644\u0627\u0632\u0645 \u064a\u062c\u064a \u0645\u0646 \u0645\u0635\u0627\u062f\u0631 \u0648\u064a\u0628 \u0645\u0642\u0631\u0648\u0621\u0629."
-                : "Research must come from read web sources.",
-            _ => arabic ? "\u062a\u062d\u0633\u064a\u0646 \u0627\u0644\u0635\u064a\u0627\u063a\u0629." : "Improve wording."
+            "classification_not_visible" => $"{frame.Signal.Topic}/{frame.Signal.Action}",
+            "focus_terms_missing" => $"terms:{string.Join("+", frame.FocusTerms.Take(5))}",
+            "image_not_acknowledged" => "image",
+            "tool_path_missing" => $"tools:{ToolRouteName(frame.Signal)}",
+            "code_contract_missing" => $"contract:{string.Join("+", CodeContractSlots(frame))}",
+            "research_path_missing" => $"sources:{string.Join("+", frame.FocusTerms.Take(4))}",
+            _ => issue
         };
 
     private static string RefineEvidenceAnswer(string goal, string answer, BrainSignal signal, ObservationInsights insights)
     {
         var refined = answer.Trim();
-        var arabic = signal.Language == "ar";
-        var issues = new List<string>();
+        var revisions = new List<string>();
 
         if (insights.ToolNames.Count > 0 &&
-            !ContainsAny(refined, "Checked", "\u0641\u062d\u0635\u062a", "\u0627\u0633\u062a\u062e\u062f\u0645\u062a"))
+            !insights.ToolNames.Any(tool => refined.Contains(tool, StringComparison.OrdinalIgnoreCase)))
         {
-            issues.Add(arabic
-                ? "\u0623\u0636\u0641\u062a \u0625\u0634\u0627\u0631\u0629 \u0623\u0648\u0636\u062d \u0644\u0644\u0623\u062f\u0648\u0627\u062a \u0627\u0644\u0645\u0633\u062a\u062e\u062f\u0645\u0629."
-                : "Made the used tools clearer.");
+            revisions.Add($"tools:{string.Join("+", insights.ToolNames.Take(5))}");
         }
 
         if (signal.Topic == "research" &&
-            !ContainsAny(refined, "source", "Web evidence", "\u0645\u0635\u0627\u062f\u0631", "\u0627\u0644\u0648\u064a\u0628"))
+            !ContainsAny(refined, "URL:", "http://", "https://"))
         {
-            issues.Add(arabic
-                ? "\u0631\u0628\u0637\u062a \u0627\u0644\u0645\u0644\u062e\u0635 \u0628\u0645\u0633\u0627\u0631 \u0627\u0644\u0645\u0635\u0627\u062f\u0631."
-                : "Connected the summary to source evidence.");
+            revisions.Add($"sources:{insights.Evidence.Count}");
         }
 
-        if (!ContainsAny(refined, "Next best move", "\u0627\u0644\u062e\u0637\u0648\u0629 \u0627\u0644\u062c\u0627\u064a\u0629"))
+        if (!refined.Contains("next:", StringComparison.OrdinalIgnoreCase) &&
+            !refined.Contains("\u062a\u0627\u0644\u064a:", StringComparison.OrdinalIgnoreCase))
         {
-            issues.Add(arabic
-                ? "\u0623\u0636\u0641\u062a \u0646\u0642\u0637\u0629 \u062a\u0646\u0641\u064a\u0630\u064a\u0629 \u062a\u062e\u0644\u064a \u0627\u0644\u0631\u062f \u0642\u0627\u0628\u0644 \u0644\u0644\u062a\u062d\u0631\u0643."
-                : "Added an actionable next step.");
+            revisions.Add(BuildNextActionToken(signal, insights));
         }
 
-        var reviewLine = issues.Count == 0
-            ? arabic
-                ? "\u0645\u0631\u0627\u062c\u0639\u0629 recursive: \u0627\u0644\u0625\u062c\u0627\u0628\u0629 \u0627\u062a\u0631\u0627\u062c\u0639\u062a \u0645\u062d\u0644\u064a\u0627 \u0628\u0639\u062f \u0627\u0644\u0623\u062f\u0644\u0629."
-                : "Recursive answer check: reviewed locally after evidence collection."
-            : arabic
-                ? $"\u0645\u0631\u0627\u062c\u0639\u0629 recursive: {string.Join(" ", issues)}"
-                : $"Recursive answer check: {string.Join(" ", issues)}";
-
-        return $"{refined}{Environment.NewLine}{Environment.NewLine}{reviewLine}";
+        return revisions.Count == 0
+            ? refined
+            : $"{refined}{Environment.NewLine}{Field(signal, "revision", string.Join(",", revisions.Distinct(StringComparer.OrdinalIgnoreCase)))}";
     }
 
     private static IReadOnlyList<string> SplitClauses(string text) =>
@@ -517,137 +597,6 @@ internal static class LocalSemanticBrain
             .FirstOrDefault(pair => pair.Value > 0);
 
         return best.Value > 0 ? best.Key : "general";
-    }
-
-    private static void AppendUnderstanding(StringBuilder builder, BrainSignal signal)
-    {
-        builder.AppendLine(signal.Language == "ar" ? "\u0627\u0644\u0644\u064a \u0641\u0647\u0645\u062a\u0647:" : "What I understood:");
-        builder.AppendLine(signal.Language == "ar"
-            ? $"- \u0623\u0646\u062a \u0628\u062a\u0637\u0644\u0628: {signal.Summary}"
-            : $"- You asked: {signal.Summary}");
-        builder.AppendLine(signal.Language == "ar"
-            ? $"- \u0627\u0644\u062a\u0635\u0646\u064a\u0641: {signal.Topic} / {signal.Action} ({signal.Confidence:0.00})"
-            : $"- Local classification: {signal.Topic} / {signal.Action} ({signal.Confidence:0.00})");
-
-        if (signal.Keywords.Count > 0)
-        {
-            builder.AppendLine(signal.Language == "ar"
-                ? $"- \u0643\u0644\u0645\u0627\u062a \u0645\u062d\u0648\u0631\u064a\u0629: {string.Join(", ", signal.Keywords)}"
-                : $"- Focus terms: {string.Join(", ", signal.Keywords)}");
-        }
-    }
-
-    private static void AppendFindings(StringBuilder builder, BrainSignal signal, ObservationInsights insights)
-    {
-        builder.AppendLine(signal.Language == "ar" ? "\u0627\u0644\u0644\u064a \u0644\u0642\u064a\u062a\u0647:" : "What I found:");
-
-        if (signal.Topic == "backend" && insights.Routes.Count > 0)
-        {
-            builder.AppendLine($"- Found {insights.Routes.Count} HTTP routes.");
-            foreach (var group in GroupRoutes(insights.Routes).Take(8))
-            {
-                builder.AppendLine($"- {group.Key}: {string.Join(", ", group.Value.Take(8))}");
-            }
-        }
-        else if (signal.Topic == "model")
-        {
-            builder.AppendLine("- The current runtime is local and self-contained; this path does not call an external LLM.");
-            builder.AppendLine("- The brain layer separates casual chat from workspace tasks before the agent loop.");
-            builder.AppendLine("- For project tasks it uses local pattern centroids, hashed embeddings, evidence ranking, and task-specific synthesis.");
-            AppendIfAny(builder, "Relevant model symbols", insights.Symbols.Where(symbol =>
-                ContainsAny(symbol, "Model", "Engine", "Planner", "Understanding", "Orchestrator")));
-        }
-        else if (signal.Topic == "research")
-        {
-            AppendIfAny(builder, "Web evidence", insights.Evidence);
-        }
-        else if (signal.Topic == "frontend")
-        {
-            AppendIfAny(builder, "Relevant UI files", insights.Files.Where(file =>
-                file.EndsWith(".ts", StringComparison.OrdinalIgnoreCase) ||
-                file.EndsWith(".html", StringComparison.OrdinalIgnoreCase) ||
-                file.EndsWith(".scss", StringComparison.OrdinalIgnoreCase)));
-            AppendIfAny(builder, "UI signals", insights.Evidence);
-        }
-        else
-        {
-            AppendIfAny(builder, "Evidence", insights.Evidence);
-        }
-
-        if (insights.Failures.Count > 0)
-        {
-            AppendIfAny(builder, "Problems noticed", insights.Failures);
-        }
-
-        var hasTopicFindings = signal.Topic == "model" ||
-                               signal.Topic == "backend" && insights.Routes.Count > 0 ||
-                               signal.Topic == "frontend" && insights.Files.Count > 0 ||
-                               signal.Topic == "research" && insights.Evidence.Count > 0;
-        if (!hasTopicFindings &&
-            insights.Routes.Count == 0 &&
-            insights.Evidence.Count == 0 &&
-            insights.Failures.Count == 0)
-        {
-            builder.AppendLine("- I did not get enough useful evidence from this run. The next pass should read more targeted files.");
-        }
-    }
-
-    private static void AppendEvidence(StringBuilder builder, BrainSignal signal, ObservationInsights insights)
-    {
-        if (signal.Topic == "model" || signal.Topic == "backend" && insights.Routes.Count > 0)
-        {
-            return;
-        }
-
-        var evidence = insights.Evidence
-            .Where(line => !line.StartsWith("Workspace:", StringComparison.OrdinalIgnoreCase))
-            .Take(5)
-            .ToArray();
-
-        if (evidence.Length == 0)
-        {
-            return;
-        }
-
-        builder.AppendLine();
-        builder.AppendLine(signal.Language == "ar" ? "\u0623\u0647\u0645 \u0625\u0634\u0627\u0631\u0627\u062a \u0627\u062a\u0641\u062d\u0635\u062a:" : "Most relevant evidence:");
-        foreach (var line in evidence)
-        {
-            builder.AppendLine($"- {line}");
-        }
-    }
-
-    private static void AppendToolSummary(StringBuilder builder, BrainSignal signal, ObservationInsights insights)
-    {
-        if (insights.ToolNames.Count == 0)
-        {
-            return;
-        }
-
-        builder.AppendLine();
-        builder.AppendLine(signal.Topic == "research"
-            ? signal.Language == "ar" ? "\u0627\u0633\u062a\u062e\u062f\u0645\u062a \u0623\u062f\u0648\u0627\u062a:" : "Checked with tools:"
-            : signal.Language == "ar" ? "\u0641\u062d\u0635\u062a \u0645\u062d\u0644\u064a\u0627:" : "Checked locally:");
-        builder.AppendLine($"- {string.Join(", ", insights.ToolNames.Take(8))}");
-    }
-
-    private static void AppendNextMove(StringBuilder builder, BrainSignal signal, ObservationInsights insights)
-    {
-        builder.AppendLine();
-        builder.AppendLine(signal.Language == "ar" ? "\u0627\u0644\u062e\u0637\u0648\u0629 \u0627\u0644\u062c\u0627\u064a\u0629:" : "Next best move:");
-        var move = signal.Topic switch
-        {
-            "backend" when signal.Action is "fix" or "build" => "Add or update backend tests around the exact endpoint/flow, then change the route/service code.",
-            "backend" => "Use the route map to pick one endpoint, inspect its request/response contract, then add a focused test.",
-            "frontend" => "Inspect the Angular component state and template around the target workflow, then validate it in the browser.",
-            "model" => "Train/update the local pattern bank with workspace examples and add regression tests for answer quality.",
-            "research" => "Read one more high-signal source if the evidence conflicts, then cite the final source list.",
-            "debugging" when insights.Failures.Count > 0 => "Start from the first failure above, reproduce it, and patch the responsible file.",
-            "testing" => "Run the smallest failing test/build command, then expand coverage only around the changed behavior.",
-            _ => "Give me a narrower build/fix/review target and I will route it through local tools."
-        };
-
-        builder.AppendLine($"- {move}");
     }
 
     private static IReadOnlyDictionary<string, IReadOnlyList<string>> GroupRoutes(IReadOnlyList<string> routes)

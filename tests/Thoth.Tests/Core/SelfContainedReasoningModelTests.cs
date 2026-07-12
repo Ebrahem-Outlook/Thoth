@@ -16,8 +16,10 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("Recursive parse:", response.Content);
-        Assert.Contains("Recursive self-check", response.Content);
+        Assert.Contains("request: Hello", response.Content);
+        Assert.Contains("intent: general/chat", response.Content);
+        Assert.DoesNotContain("Recursive parse:", response.Content);
+        Assert.DoesNotContain("Recursive self-check", response.Content);
         Assert.DoesNotContain("Hey, I am here", response.Content);
         Assert.DoesNotContain("self-contained mode", response.Content, StringComparison.OrdinalIgnoreCase);
     }
@@ -32,9 +34,10 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("Recursive parse:", response.Content);
-        Assert.Contains("local agent", response.Content, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("tools", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("request: what can you do?", response.Content);
+        Assert.Contains("capabilities:", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("route:", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("I can work as a local agent", response.Content, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -63,10 +66,11 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("You asked: Review the backend API endpoints and summarize them", response.Content);
-        Assert.Contains("What I found:", response.Content);
+        Assert.Contains("request: Review the backend API endpoints and summarize them", response.Content);
+        Assert.Contains("intent: backend/inspect", response.Content);
         Assert.Contains("GET /health", response.Content);
         Assert.DoesNotContain("Tools used:", response.Content);
+        Assert.DoesNotContain("What I found:", response.Content);
         Assert.False(response.Content.StartsWith("{", StringComparison.Ordinal));
         Assert.DoesNotContain("Intent understood:\r\n- Review the backend API endpoints and summarize them    Plan:", response.Content);
     }
@@ -81,8 +85,10 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("\u062a\u0641\u0643\u064a\u0643 recursive", response.Content);
-        Assert.Contains("\u0645\u0631\u0627\u062c\u0639\u0629 recursive", response.Content);
+        Assert.Contains("\u0637\u0644\u0628: \u0627\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a", response.Content);
+        Assert.Contains("\u0646\u064a\u0629: general/chat", response.Content);
+        Assert.DoesNotContain("\u062a\u0641\u0643\u064a\u0643 recursive", response.Content);
+        Assert.DoesNotContain("\u0645\u0631\u0627\u062c\u0639\u0629 recursive", response.Content);
         Assert.DoesNotContain("I read it as", response.Content);
         Assert.DoesNotContain("Detected topic", response.Content);
     }
@@ -191,9 +197,9 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("\u0627\u0644\u0645\u064a\u062b\u0648\u062f", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("contract:", response.Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("validation", response.Content, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("\u0645\u0631\u0627\u062c\u0639\u0629 recursive", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\u0645\u0631\u0627\u062c\u0639\u0629 recursive", response.Content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("```csharp", response.Content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("public static", response.Content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("HTTP routes", response.Content, StringComparison.OrdinalIgnoreCase);
@@ -309,7 +315,8 @@ public sealed class SelfContainedReasoningModelTests
 
         Assert.Contains("https://langchain-ai.github.io/langgraph/", response.Content);
         Assert.Contains("LangGraph", response.Content);
-        Assert.Contains("Recursive answer check", response.Content);
+        Assert.Contains("tools: web.research", response.Content);
+        Assert.DoesNotContain("Recursive answer check", response.Content);
         Assert.DoesNotContain("old project memory", response.Content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("workspace.summary", response.Content, StringComparison.OrdinalIgnoreCase);
     }
@@ -324,8 +331,8 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("\u0627\u0644\u0645\u064a\u062b\u0648\u062f", response.Content);
-        Assert.Contains("\u062a\u0641\u0643\u064a\u0643 recursive", response.Content);
+        Assert.Contains("contract:", response.Content);
+        Assert.DoesNotContain("\u062a\u0641\u0643\u064a\u0643 recursive", response.Content);
         Assert.DoesNotContain("Ø", response.Content);
         Assert.DoesNotContain("Ù", response.Content);
     }
@@ -441,6 +448,7 @@ public sealed class SelfContainedReasoningModelTests
             0));
 
         Assert.False(response.Content.TrimStart().StartsWith("{", StringComparison.Ordinal));
-        Assert.Contains("What I understood:", response.Content);
+        Assert.Contains("request: inspect the decision service", response.Content);
+        Assert.DoesNotContain("What I understood:", response.Content);
     }
 }
