@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Thoth.Cognition.Concepts;
 using Thoth.Cognition.Procedures;
 using Thoth.Cognition.Tasks;
 using Thoth.Core.Agent;
@@ -64,10 +65,17 @@ public static class ThothRuntimeServiceCollectionExtensions
             return new SqliteConversationTaskStore(Path.Combine(options.DataDirectory, "memory", "thoth.sqlite"));
         });
 
+        services.AddSingleton<IConceptGraphStore>(provider =>
+        {
+            var options = provider.GetRequiredService<IOptions<ThothOptions>>().Value;
+            return new SqliteConceptGraphStore(Path.Combine(options.DataDirectory, "memory", "thoth.sqlite"));
+        });
+
         services.AddSingleton<CodeTaskExtractor>();
         services.AddSingleton<TaskContinuationResolver>();
         services.AddSingleton<TaskMerger>();
         services.AddSingleton<ProcedureRegistry>();
+        services.AddSingleton<ConceptActivationService>();
 
         services.AddSingleton<IExecutionPolicy>(provider =>
         {
