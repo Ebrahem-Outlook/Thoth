@@ -95,7 +95,13 @@ public sealed class ChatOrchestrator(
                 Attachments: message.Attachments.Select(ToChatAttachment).ToArray()))
             .ToList() ?? [];
 
-        history.Add(new ChatMessage(ChatRole.User, request.Content, Attachments: attachments.Select(ToChatAttachment).ToArray()));
+        var currentTurnAlreadyLoaded =
+            detail?.Messages.LastOrDefault() is { Role: ChatRole.User } last &&
+            string.Equals(last.Content, request.Content, StringComparison.Ordinal);
+        if (!currentTurnAlreadyLoaded)
+        {
+            history.Add(new ChatMessage(ChatRole.User, request.Content, Attachments: attachments.Select(ToChatAttachment).ToArray()));
+        }
 
         var system = new ChatMessage(ChatRole.System, $$"""
         You are Thoth, a capable Arabic/English AI agent.
@@ -107,7 +113,16 @@ public sealed class ChatOrchestrator(
         """);
 
         var response = await chatModel.CompleteAsync(
-            new ChatRequest([system, .. history], request.Model, 0.25),
+            new ChatRequest(
+                [system, .. history],
+                request.Model,
+                0.25,
+                Purpose: ModelRequestPurpose.DirectReply,
+                Input: new DirectReplyModelInput(
+                    request.Content,
+                    attachments.Any(attachment => attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)),
+                    understood.Language,
+                    attachments.Select(ToChatAttachment).ToArray())),
             cancellationToken);
 
         return response.Content.Trim();

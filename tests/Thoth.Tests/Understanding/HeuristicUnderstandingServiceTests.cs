@@ -88,6 +88,34 @@ public sealed class HeuristicUnderstandingServiceTests
         Assert.False(result.RequiresTools);
     }
 
+    [Fact]
+    public async Task UnderstandAsync_RoutesArabicTypeScriptMethodToCodeGeneration()
+    {
+        var service = new HeuristicUnderstandingService();
+
+        var result = await service.UnderstandAsync(new UnderstandingRequest(
+            "\u0645\u0645\u0643\u0646 \u062a\u0628\u0646\u064a method Type script",
+            []));
+
+        Assert.Equal("code_generation", result.Intent);
+        Assert.Equal("coding", result.Topic);
+        Assert.False(result.RequiresTools);
+    }
+
+    [Fact]
+    public async Task UnderstandAsync_KeepsSmartnessQuestionCasual()
+    {
+        var service = new HeuristicUnderstandingService();
+
+        var result = await service.UnderstandAsync(new UnderstandingRequest(
+            "Do you think you are smarter now?",
+            []));
+
+        Assert.Equal("general_chat", result.Intent);
+        Assert.Equal("general", result.Topic);
+        Assert.False(result.RequiresTools);
+    }
+
     [Theory]
     [InlineData("add a C# method to Program.cs")]
     [InlineData("\u0636\u064a\u0641 method \u0641\u064a \u0645\u0644\u0641 Program.cs")]

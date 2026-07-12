@@ -32,7 +32,9 @@ public sealed class AgentEngineTests
         Assert.Contains(run.Steps, step => step.Invocation?.ToolName == "workspace.summary");
         Assert.Contains(run.Steps, step => step.Invocation?.ToolName == "workspace.map");
         Assert.Contains(run.Steps, step => step.Invocation?.ToolName == "file.read");
-        Assert.Contains("request: summarize Program.cs in this workspace", run.FinalAnswer);
+        Assert.Contains("useful summary", run.FinalAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("request:", run.FinalAnswer, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("intent:", run.FinalAnswer, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("What I understood:", run.FinalAnswer);
         Assert.Contains("Program.cs", run.FinalAnswer);
 

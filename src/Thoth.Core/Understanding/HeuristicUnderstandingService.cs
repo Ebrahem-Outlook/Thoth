@@ -26,13 +26,10 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "run",
         "model",
         "llm",
-        "reason",
-        "reasoning",
-        "brain",
-        "neural",
-        "train",
-        "think",
-        "intelligence",
+        "reasoning model",
+        "neural model",
+        "train model",
+        "local model",
         "\u0645\u0634\u0631\u0648\u0639",
         "\u0645\u0644\u0641",
         "\u0628\u0627\u0643",
@@ -60,6 +57,12 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "function",
         "class",
         "snippet",
+        "typescript",
+        "type script",
+        "javascript",
+        "java script",
+        "ts",
+        "js",
         "\u0627\u0643\u062a\u0628",
         "\u0643\u0648\u062f",
         "\u0645\u064a\u062b\u0648\u062f",
@@ -104,8 +107,6 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         "brain",
         "neural",
         "train",
-        "think",
-        "intelligence",
         "\u0645\u0648\u062f\u064a\u0644",
         "\u064a\u0641\u0643\u0631",
         "\u0639\u0642\u0644",
@@ -179,7 +180,7 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
         var text = request.Text.Trim();
         var lower = text.ToLowerInvariant();
         var requiresVision = request.AttachmentContentTypes.Any(type => type.StartsWith("image/", StringComparison.OrdinalIgnoreCase));
-        if (IsCasualChat(lower, text) && !requiresVision)
+        if ((IsCasualChat(lower, text) || LooksLikeSelfAssessment(lower, text)) && !requiresVision)
         {
             return Task.FromResult(new UnderstandingResult(
                 "general_chat",
@@ -217,7 +218,7 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
 
     private static bool LooksLikeCodeGenerationTask(string lower, string text) =>
         ContainsAny(lower, CodeGenerationTerms) ||
-        ContainsAny(text, "\u0633\u064a \u0634\u0627\u0631\u0628");
+        ContainsAny(text, "\u0633\u064a \u0634\u0627\u0631\u0628", "\u062a\u0627\u064a\u0628 \u0633\u0643\u0631\u0628\u062a", "\u062a\u0627\u064a\u0628\u0633\u0643\u0631\u064a\u0628\u062a");
 
     private static bool LooksLikeFileTask(string text) =>
         text.Contains(".cs", StringComparison.OrdinalIgnoreCase) ||
@@ -280,4 +281,8 @@ public sealed class HeuristicUnderstandingService : IUserUnderstandingService
                ContainsAny(lower, "do you understand me", "understand me", "are you following", "got me") ||
                ContainsAny(text, "\u0627\u0647\u0644\u0627", "\u0623\u0647\u0644\u0627", "\u0645\u0631\u062d\u0628\u0627", "\u0633\u0644\u0627\u0645", "\u0627\u0632\u064a\u0643", "\u0634\u0643\u0631\u0627", "\u0627\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a", "\u0623\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a", "\u0641\u0627\u0647\u0645\u0646\u064a", "\u0641\u0647\u0645\u062a\u0646\u064a");
     }
+
+    private static bool LooksLikeSelfAssessment(string lower, string text) =>
+        ContainsAny(lower, "do you think you are smarter", "are you smarter", "do you think", "are you intelligent") ||
+        ContainsAny(text, "\u0628\u0642\u064a\u062a \u0627\u0630\u0643\u0649", "\u0627\u0646\u062a \u0627\u0630\u0643\u0649", "\u0627\u0646\u062a \u0630\u0643\u064a");
 }

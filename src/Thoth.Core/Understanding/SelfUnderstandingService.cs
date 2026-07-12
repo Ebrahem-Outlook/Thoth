@@ -11,35 +11,21 @@ public sealed class SelfUnderstandingService(
         UnderstandingRequest request,
         CancellationToken cancellationToken = default)
     {
-        var prompt = $$"""
-        Classify the user's message for Thoth's self-contained agent runtime. Return JSON only.
-        Shape:
-        {
-          "intent": "general_chat | workspace_task | vision_chat | file_analysis | creative | research",
-          "topic": "short topic",
-          "language": "ar | en | mixed | other",
-          "requiresTools": true,
-          "requiresVision": false,
-          "isLongContext": false,
-          "confidence": 0.0,
-          "summary": "one sentence"
-        }
-
-        Attachment content types: {{string.Join(", ", request.AttachmentContentTypes)}}
-        User message:
-        {{request.Text}}
-        """;
-
         try
         {
             var response = await model.CompleteAsync(
                 new ChatRequest(
                     [
                         new ChatMessage(ChatRole.System, "You are Thoth's internal deterministic classifier."),
-                        new ChatMessage(ChatRole.User, prompt)
+                        new ChatMessage(ChatRole.User, request.Text)
                     ],
                     "thoth-understanding",
-                    0),
+                    0,
+                    Purpose: ModelRequestPurpose.UnderstandUser,
+                    Input: new UnderstandingModelInput(
+                        request.Text,
+                        request.AttachmentContentTypes,
+                        request.Project)),
                 cancellationToken);
 
             var parsed = TryParse(response.Content);

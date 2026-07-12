@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Thoth.Core.Agent;
 using Thoth.Core.Chat;
+using Thoth.Core.Understanding;
 
 namespace Thoth.Llm.Models;
 
@@ -33,6 +35,12 @@ public sealed class SelfContainedReasoningModel : IChatModel
         "function",
         "class",
         "snippet",
+        "typescript",
+        "type script",
+        "javascript",
+        "java script",
+        "ts",
+        "js",
         "\u0643\u0648\u062f",
         "\u0645\u064a\u062b\u0648\u062f",
         "\u0645\u064a\u062b\u062f",
@@ -151,33 +159,26 @@ public sealed class SelfContainedReasoningModel : IChatModel
 
     public Task<ChatResponse> CompleteAsync(ChatRequest request, CancellationToken cancellationToken = default)
     {
-        var transcript = string.Join("\n", request.Messages.Select(message => message.Content));
-        var lastUserContent = request.Messages.LastOrDefault(message => message.Role == ChatRole.User)?.Content ?? transcript;
-        var content = IsAgentDecisionPrompt(lastUserContent)
-            ? CreateAgentDecision(lastUserContent)
-            : transcript.Contains("Observations:", StringComparison.OrdinalIgnoreCase)
-                ? CreateFinalAnswer(transcript)
-                : IsPlanPrompt(lastUserContent)
-                ? CreatePlan(lastUserContent)
-                : IsUnderstandingPrompt(lastUserContent)
-                    ? CreateUnderstanding(lastUserContent)
-                    : CreateDirectReply(request);
+        var content = request.Purpose switch
+        {
+            ModelRequestPurpose.UnderstandUser => CreateUnderstanding(request),
+            ModelRequestPurpose.AgentPlan => CreatePlan(request),
+            ModelRequestPurpose.AgentDecision => CreateAgentDecision(request),
+            ModelRequestPurpose.FinalSynthesis => CreateFinalAnswer(request),
+            ModelRequestPurpose.DirectReply => CreateDirectReply(request),
+            ModelRequestPurpose.TrainingProbe => "The local training probe is available only through explicit training and evaluation commands.",
+            _ => CreateDirectReply(request)
+        };
 
         return Task.FromResult(new ChatResponse(content, "thoth-self"));
     }
 
-    private static bool IsAgentDecisionPrompt(string content) =>
-        content.TrimStart().StartsWith("Return one JSON agent decision only", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsPlanPrompt(string content) =>
-        content.TrimStart().StartsWith("Return a JSON plan only", StringComparison.OrdinalIgnoreCase);
-
-    private static bool IsUnderstandingPrompt(string content) =>
-        content.TrimStart().StartsWith("Classify the user's message", StringComparison.OrdinalIgnoreCase);
-
-    private static string CreatePlan(string transcript)
+    private static string CreatePlan(ChatRequest request)
     {
-        var goal = ExtractLineAfterLabel(transcript, "Goal:");
+        var input = request.Input as AgentPlanModelInput;
+        var goal = input?.Request.Goal ??
+                   request.Messages.LastOrDefault(message => message.Role == ChatRole.User)?.Content ??
+                   string.Empty;
         var signal = LocalSemanticBrain.AnalyzeGoal(goal);
         var lower = goal.ToLowerInvariant();
         var researchTask = LooksLikeResearchTask(lower, goal);
@@ -332,13 +333,24 @@ public sealed class SelfContainedReasoningModel : IChatModel
         return JsonSerializer.Serialize(payload);
     }
 
-    private static string CreateAgentDecision(string transcript)
+    private static string CreateAgentDecision(ChatRequest request)
     {
-        var goal = ExtractLineAfterLabel(transcript, "Goal:");
-        var observations = ExtractBetweenLabels(transcript, "Executed observations:", "Rules:");
-        var tools = ExtractAvailableTools(transcript);
-        var usedTools = ExtractUsedTools(transcript).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var readPaths = ExtractReadPaths(transcript).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (request.Input is not AgentDecisionModelInput input)
+        {
+            return AgentFinalDecision(
+                "The agent decision request was missing structured input.",
+                "I could not choose a safe tool action because the decision context was incomplete.");
+        }
+
+        var goal = input.Request.Goal;
+        var observations = FormatObservations(input.Observations);
+        var tools = input.Tools.Select(tool => tool.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var usedTools = input.Observations.Select(observation => observation.Tool).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var readPaths = input.Observations
+            .Where(observation => observation.Tool.Equals("file.read", StringComparison.OrdinalIgnoreCase))
+            .Select(observation => observation.Metadata is not null && observation.Metadata.TryGetValue("path", out var path) ? path.Replace('\\', '/') : string.Empty)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
         var signal = LocalSemanticBrain.AnalyzeGoal(goal);
         var lower = goal.ToLowerInvariant();
 
@@ -443,20 +455,24 @@ public sealed class SelfContainedReasoningModel : IChatModel
         {
             return AgentFinalDecision(
                 "Collected enough evidence for a grounded final answer.",
-                LocalSemanticBrain.BuildFinalAnswer(goal, observations));
+                BuildFinalSynthesis(new FinalSynthesisModelInput(goal, string.Empty, input.Observations)).Content);
         }
 
         return AgentFinalDecision(
             "No more useful safe action was available; answer from the evidence already collected.",
-            LocalSemanticBrain.BuildFinalAnswer(goal, observations));
+            BuildFinalSynthesis(new FinalSynthesisModelInput(goal, string.Empty, input.Observations)).Content);
     }
 
-    private static string CreateUnderstanding(string transcript)
+    private static string CreateUnderstanding(ChatRequest request)
     {
-        var message = ExtractAfterLabel(transcript, "User message:");
+        var input = request.Input as UnderstandingModelInput;
+        var message = input?.Text ??
+                      request.Messages.LastOrDefault(message => message.Role == ChatRole.User)?.Content ??
+                      string.Empty;
         var signal = LocalSemanticBrain.AnalyzeGoal(message);
         var lower = message.ToLowerInvariant();
         var hasArabic = HasArabic(message);
+        var selfAssessment = LooksLikeSelfAssessment(lower, message);
         var codeGeneration = LooksLikeGenericCodeGeneration(lower, message);
         var researchTask = LooksLikeResearchTask(lower, message);
         var projectBound = !researchTask && (LooksLikeProjectBoundTask(lower, message) || LooksLikeFileTask(lower) || LooksLikeCommandTask(lower));
@@ -471,7 +487,8 @@ public sealed class SelfContainedReasoningModel : IChatModel
                             architectureTask ||
                             signal.RequiresTools && !(codeGeneration && !projectBound);
 
-        var topic = researchTask ? "research" :
+        var topic = selfAssessment ? "general" :
+            researchTask ? "research" :
             codeGeneration && !requiresTools ? "coding" :
             modelTask ? "model" :
             frontendTask ? "frontend" :
@@ -482,11 +499,11 @@ public sealed class SelfContainedReasoningModel : IChatModel
 
         var payload = new
         {
-            intent = researchTask ? "research" : requiresTools ? "workspace_task" : codeGeneration ? "code_generation" : "general_chat",
+            intent = selfAssessment ? "general_chat" : researchTask ? "research" : requiresTools ? "workspace_task" : codeGeneration ? "code_generation" : "general_chat",
             topic,
             language = hasArabic ? "ar" : "en",
             requiresTools,
-            requiresVision = transcript.Contains("image/", StringComparison.OrdinalIgnoreCase),
+            requiresVision = input?.AttachmentContentTypes.Any(type => type.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) == true,
             isLongContext = message.Length > 8000,
             confidence = researchTask ? Math.Max(signal.Confidence, 0.86) : requiresTools ? Math.Max(signal.Confidence, 0.84) : codeGeneration ? Math.Max(signal.Confidence, 0.82) : signal.Confidence,
             summary = signal.Summary
@@ -495,25 +512,84 @@ public sealed class SelfContainedReasoningModel : IChatModel
         return JsonSerializer.Serialize(payload);
     }
 
-    private static string CreateFinalAnswer(string transcript)
+    private static string CreateFinalAnswer(ChatRequest request)
     {
-        var goalEndLabel = transcript.Contains("Plan:", StringComparison.OrdinalIgnoreCase)
-            ? "Plan:"
-            : transcript.Contains("Stop reason:", StringComparison.OrdinalIgnoreCase)
-                ? "Stop reason:"
-                : "Observations:";
-        var goal = ExtractBetweenLabels(transcript, "Goal:", goalEndLabel);
-        var observations = ExtractBetweenLabels(transcript, "Observations:", "Write a direct");
-        return LocalSemanticBrain.BuildFinalAnswer(goal, observations);
+        if (request.Input is not FinalSynthesisModelInput input)
+        {
+            return AssistantOutputSanitizer.Sanitize(new AssistantResponse(
+                AssistantResponseKind.Error,
+                "I could not produce a grounded final answer because no structured observations were provided.")).Content;
+        }
+
+        return AssistantOutputSanitizer.Sanitize(BuildFinalSynthesis(input)).Content;
     }
 
     private static string CreateDirectReply(ChatRequest request)
     {
+        var direct = request.Input as DirectReplyModelInput;
         var lastUser = request.Messages.LastOrDefault(message => message.Role == ChatRole.User);
-        var text = lastUser?.Content.Trim() ?? string.Empty;
-        var hasImage = lastUser?.Attachments?.Any(attachment => attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) == true;
-        return LocalSemanticBrain.BuildDirectReply(text, hasImage);
+        var text = direct?.Text ?? lastUser?.Content.Trim() ?? string.Empty;
+        var hasImage = direct?.HasImage ??
+                       lastUser?.Attachments?.Any(attachment => attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) == true;
+        return AssistantOutputSanitizer.Sanitize(UsefulResponseFallback.CreateDirectReply(text, hasImage)).Content.Trim();
     }
+
+    private static AssistantResponse BuildFinalSynthesis(FinalSynthesisModelInput input)
+    {
+        var successful = input.Observations.Where(observation => observation.Succeeded).ToArray();
+        if (successful.Length == 0)
+        {
+            return new AssistantResponse(
+                AssistantResponseKind.CapabilityLimitation,
+                $"I could not verify the request from tool evidence yet. Goal: {SingleLine(input.Goal, 180)}");
+        }
+
+        var builder = new StringBuilder();
+        builder.AppendLine("I checked the available evidence and here is the useful summary:");
+        foreach (var observation in successful.Take(8))
+        {
+            builder.AppendLine($"- {CleanToolName(observation.Tool)}: {SingleLine(observation.Summary, 220)}");
+        }
+
+        var failed = input.Observations.Where(observation => !observation.Succeeded).Take(3).ToArray();
+        if (failed.Length > 0)
+        {
+            builder.AppendLine();
+            builder.AppendLine("Some checks did not complete:");
+            foreach (var observation in failed)
+            {
+                builder.AppendLine($"- {CleanToolName(observation.Tool)}: {SingleLine(observation.Summary, 180)}");
+            }
+        }
+
+        return new AssistantResponse(AssistantResponseKind.ToolResultSummary, builder.ToString().Trim());
+    }
+
+    private static string FormatObservations(IReadOnlyList<AgentObservation> observations)
+    {
+        var builder = new StringBuilder();
+        foreach (var observation in observations)
+        {
+            builder.AppendLine($"Step {observation.Step}");
+            builder.AppendLine($"Tool {observation.Tool}");
+            builder.AppendLine($"Succeeded {observation.Succeeded}");
+            builder.AppendLine(observation.Summary);
+            if (observation.Metadata is not null && observation.Metadata.Count > 0)
+            {
+                foreach (var metadata in observation.Metadata.Take(10))
+                {
+                    builder.AppendLine($"{metadata.Key}={metadata.Value}");
+                }
+            }
+
+            builder.AppendLine();
+        }
+
+        return builder.ToString();
+    }
+
+    private static string CleanToolName(string tool) =>
+        tool.Equals("none", StringComparison.OrdinalIgnoreCase) ? "no tool" : tool;
 
     private static void AppendBackendFindings(StringBuilder builder, string observations)
     {
@@ -829,8 +905,12 @@ public sealed class SelfContainedReasoningModel : IChatModel
         ContainsAny(lower, ArchitectureTerms);
 
     private static bool LooksLikeModelTask(string lower, string text) =>
-        ContainsAny(lower, "model", "llm", "reason", "reasoning", "neural", "train", "brain", "think", "intelligence") ||
+        ContainsAny(lower, "model", "llm", "reasoning model", "neural model", "train model", "local model", "checkpoint") ||
         ContainsAny(text, "\u0645\u0648\u062f\u064a\u0644", "\u064a\u0641\u0643\u0631", "\u0630\u0643\u064a", "\u0639\u0642\u0644", "\u062a\u062f\u0631\u064a\u0628", "\u0639\u0635\u0628\u064a");
+
+    private static bool LooksLikeSelfAssessment(string lower, string text) =>
+        ContainsAny(lower, "do you think you are smarter", "are you smarter", "do you think", "are you intelligent") ||
+        ContainsAny(text, "\u0628\u0642\u064a\u062a \u0627\u0630\u0643\u0649", "\u0627\u0646\u062a \u0627\u0630\u0643\u0649", "\u0627\u0646\u062a \u0630\u0643\u064a");
 
     private static bool LooksLikeResearchTask(string lower, string text) =>
         ContainsAny(lower, ResearchTerms) &&

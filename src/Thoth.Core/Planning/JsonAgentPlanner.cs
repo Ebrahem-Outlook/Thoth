@@ -21,7 +21,12 @@ public sealed class JsonAgentPlanner(IChatModel model, IAgentPlanner? fallback =
                     new ChatMessage(ChatRole.User, prompt)
                 ],
                 context.Request.Model,
-                0),
+                0,
+                Purpose: ModelRequestPurpose.AgentPlan,
+                Input: new AgentPlanModelInput(
+                    context.Request,
+                    context.Memories,
+                    context.Tools.Select(ModelToolDescriptor.FromTool).ToArray())),
             cancellationToken);
 
         var parsed = TryParse(response.Content, context.Tools);

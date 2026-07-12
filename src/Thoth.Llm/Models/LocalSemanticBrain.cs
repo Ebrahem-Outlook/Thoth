@@ -212,20 +212,10 @@ internal static class LocalSemanticBrain
 
     public static string BuildDirectReply(string text, bool hasImage)
     {
-        var frame = BuildCognitiveFrame(text, hasImage);
-        var answer = DraftDirectAnswer(frame);
-
-        for (var cycle = 1; cycle <= 3; cycle++)
-        {
-            var critique = CritiqueDraft(frame, answer);
-            answer = ImproveDraft(frame, answer, critique, cycle);
-            if (critique.Issues.Count == 0)
-            {
-                break;
-            }
-        }
-
-        return answer.Trim();
+        return Thoth.Core.Chat.AssistantOutputSanitizer
+            .Sanitize(UsefulResponseFallback.CreateDirectReply(text, hasImage))
+            .Content
+            .Trim();
     }
 
     private static string ComposeEvidenceAnswer(BrainSignal signal, ObservationInsights insights)
@@ -329,156 +319,7 @@ internal static class LocalSemanticBrain
 
     private static string DraftDirectAnswer(CognitiveFrame frame)
     {
-        if (frame.QuestionKind == "code" &&
-            TryBuildCodeAnswer(frame, out var codeAnswer))
-        {
-            return codeAnswer;
-        }
-
-        var rows = new List<string>
-        {
-            Field(frame.Signal, "request", SingleLine(frame.Text, 180)),
-            Field(frame.Signal, "intent", $"{frame.Signal.Topic}/{frame.Signal.Action} {frame.Signal.Confidence:0.00}")
-        };
-
-        if (frame.Clauses.Count > 1)
-        {
-            rows.Add(Field(frame.Signal, "parts", string.Join(" | ", frame.Clauses.Select(clause => SingleLine(clause, 90)))));
-        }
-
-        if (frame.FocusTerms.Count > 0)
-        {
-            rows.Add(Field(frame.Signal, "terms", string.Join(", ", frame.FocusTerms.Take(7))));
-        }
-
-        if (frame.Constraints.Count > 0)
-        {
-            rows.Add(Field(frame.Signal, "constraints", string.Join(" | ", frame.Constraints.Select(item => SingleLine(item, 90)))));
-        }
-
-        rows.Add(Field(frame.Signal, "route", string.Join(" -> ", BuildDirectRoute(frame))));
-
-        if (frame.HasImage)
-        {
-            rows.Add(Field(frame.Signal, "attachment", frame.Signal.Language == "ar"
-                ? "\u0635\u0648\u0631\u0629:\u0631\u0624\u064a\u0629-\u0645\u062d\u0644\u064a\u0629"
-                : "image:local-vision"));
-        }
-
-        return string.Join(Environment.NewLine, rows);
-    }
-
-    private static bool TryBuildCodeAnswer(CognitiveFrame frame, out string answer)
-    {
-        var lower = frame.Text.ToLowerInvariant();
-        if (ContainsAny(lower, "calculator", "calculate", "calc", "\u062d\u0627\u0633\u0628\u0629", "\u0627\u0644\u0629 \u062d\u0627\u0633\u0628\u0629", "\u0622\u0644\u0629 \u062d\u0627\u0633\u0628\u0629"))
-        {
-            answer = BuildCalculatorMethod(frame);
-            return true;
-        }
-
-        answer = string.Empty;
-        return false;
-    }
-
-    private static string BuildCalculatorMethod(CognitiveFrame frame)
-    {
-        var methodName = InferMethodName(frame, "Calculate");
-        var numericType = InferNumericType(frame);
-        return string.Join(Environment.NewLine,
-            "```csharp",
-            $"public static {numericType} {methodName}({numericType} left, {numericType} right, char operation)",
-            "{",
-            "    return operation switch",
-            "    {",
-            "        '+' => left + right,",
-            "        '-' => left - right,",
-            "        '*' => left * right,",
-            "        '/' when right != 0 => left / right,",
-            "        '/' => throw new DivideByZeroException(\"Cannot divide by zero.\"),",
-            "        _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, \"Unsupported calculator operation.\")",
-            "    };",
-            "}",
-            "```");
-    }
-
-    private static string InferMethodName(CognitiveFrame frame, string fallback)
-    {
-        var explicitName = Regex.Match(frame.Text, @"(?:named|called|method\s+name|function\s+name|name|اسم)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)", RegexOptions.IgnoreCase);
-        if (explicitName.Success)
-        {
-            return ToPascalCase(explicitName.Groups["name"].Value);
-        }
-
-        return fallback;
-    }
-
-    private static string InferNumericType(CognitiveFrame frame)
-    {
-        var lower = frame.Text.ToLowerInvariant();
-        if (ContainsAny(lower, "double", "float"))
-        {
-            return "double";
-        }
-
-        if (ContainsAny(lower, "int", "integer", "\u0635\u062d\u064a\u062d"))
-        {
-            return "int";
-        }
-
-        return "decimal";
-    }
-
-    private static string ToPascalCase(string value)
-    {
-        var parts = Regex.Matches(value, @"[A-Za-z0-9]+")
-            .Select(match => match.Value)
-            .Where(part => part.Length > 0)
-            .ToArray();
-        if (parts.Length == 0)
-        {
-            return "GeneratedMethod";
-        }
-
-        return string.Concat(parts.Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
-    }
-
-    private static IReadOnlyList<string> BuildDirectRoute(CognitiveFrame frame)
-    {
-        var route = new List<string>
-        {
-            $"parse:{string.Join("+", frame.Clauses.Take(3).Select(clause => string.Join("-", ExtractKeywords(clause, 3))))}",
-            $"classify:{frame.Signal.Topic}/{frame.Signal.Action}"
-        };
-
-        if (frame.QuestionKind == "code")
-        {
-            route.Add($"contract:{string.Join(",", CodeContractSlots(frame))}");
-        }
-
-        if (frame.QuestionKind == "research")
-        {
-            route.Add($"web:{string.Join(",", frame.FocusTerms.Take(4))}");
-            route.Add("sources:read");
-        }
-
-        if (frame.Signal.RequiresTools)
-        {
-            route.Add($"tools:{ToolRouteName(frame.Signal)}");
-        }
-
-        if (frame.QuestionKind == "capability")
-        {
-            route.Add($"capabilities:{string.Join(",", InferCapabilityTokens(frame))}");
-        }
-
-        if (frame.QuestionKind is "general" or "conversation" or "understanding")
-        {
-            route.Add($"answer:{SingleLine(frame.Signal.Summary, 80)}");
-        }
-
-        route.Add("revise:semantic-fit");
-        return route;
+        return UsefulResponseFallback.CreateDirectReply(frame.Text, frame.HasImage).Content;
     }
 
     private static IReadOnlyList<string> CodeContractSlots(CognitiveFrame frame)
@@ -493,19 +334,6 @@ internal static class LocalSemanticBrain
         slots.Add("output");
         slots.Add("validation");
         return slots.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
-    }
-
-    private static IReadOnlyList<string> InferCapabilityTokens(CognitiveFrame frame)
-    {
-        var tokens = new List<string> { "parse", "rank", "act", "review" };
-        if (frame.FocusTerms.Any(term => ContainsAny(term, "file", "project", "repo", "workspace")))
-        {
-            tokens.Add("workspace");
-        }
-
-        tokens.Add("web");
-        tokens.Add("memory");
-        return tokens.Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
     }
 
     private static string ToolRouteName(BrainSignal signal) =>

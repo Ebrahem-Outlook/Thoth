@@ -175,43 +175,17 @@ public sealed class AgentEngine(
         string stopReason,
         CancellationToken cancellationToken)
     {
-        var observations = new StringBuilder();
-        foreach (var step in steps)
-        {
-            observations.AppendLine($"Step {step.Index}: {step.Thought}");
-            if (step.Invocation is not null)
-            {
-                observations.AppendLine($"Tool: {step.Invocation.ToolName} {JsonSerializer.Serialize(step.Invocation.Arguments)}");
-            }
-
-            if (step.Result is not null)
-            {
-                observations.AppendLine($"Succeeded: {step.Result.Succeeded}");
-                observations.AppendLine(Trim(step.Result.Content, 3000));
-            }
-
-            observations.AppendLine();
-        }
-
+        var observations = steps.Select(AgentObservation.FromStep).ToArray();
         var response = await chatModel.CompleteAsync(
             new ChatRequest(
                 [
                     new ChatMessage(ChatRole.System, "You are Thoth. Answer only from the collected evidence, mention uncertainty, and give the next concrete action."),
-                    new ChatMessage(ChatRole.User, $"""
-                    Goal:
-                    {request.Goal}
-
-                    Stop reason:
-                    {stopReason}
-
-                    Observations:
-                    {observations}
-
-                    Write a direct final answer. Do not claim a command, build, or test succeeded unless an observation proves it.
-                    """)
+                    new ChatMessage(ChatRole.User, request.Goal)
                 ],
                 request.Model,
-                0.2),
+                0.2,
+                Purpose: ModelRequestPurpose.FinalSynthesis,
+                Input: new FinalSynthesisModelInput(request.Goal, stopReason, observations)),
             cancellationToken);
 
         return string.IsNullOrWhiteSpace(response.Content)
