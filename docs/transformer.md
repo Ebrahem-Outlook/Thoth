@@ -29,12 +29,16 @@ The pinned dependency is `TorchSharp-cpu` `0.107.0`.
 
 `TorchTransformerTrainer` provides a small local training loop over token windows with gradient accumulation, warmup/cosine learning-rate scheduling, finite-loss checks, JSONL logs, tokens/sec reporting, and atomic checkpoint directories. It is intended for smoke and pilot runs only until the full curriculum/evaluation gates are complete.
 
+## Torch Generation
+
+`TorchTransformerTextGenerator` supports greedy or seeded sampling, top-k/top-p, repetition penalty, stop tokens/sequences, cancellation, and a streaming token callback. `TorchTransformerGenerationCache` currently stores token history for deterministic replay/truncation; it is a cache contract, not yet an optimized per-layer KV tensor cache.
+
 ## Not Complete Yet
 
 This is not a production-qualified Transformer runtime yet. Remaining Phase 6 work includes:
 
 - full training resume command integration with scheduler/RNG state;
-- KV-cache generation and cache-equivalence tests;
+- optimized per-layer KV tensor cache and cache-equivalence benchmarks;
 - top-k/top-p/repetition-penalty generation;
 - mixed precision and CUDA configuration;
 - full trainer/data-loader integration with gradient accumulation;

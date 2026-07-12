@@ -10,6 +10,14 @@ public sealed record GenerationOptions
 
     public double TopP { get; init; } = 1.0;
 
+    public bool Greedy { get; init; }
+
+    public double RepetitionPenalty { get; init; } = 1.0;
+
+    public IReadOnlyList<int> StopTokenIds { get; init; } = [];
+
+    public IReadOnlyList<string> StopSequences { get; init; } = [];
+
     public int? Seed { get; init; }
 
     public void Validate()
@@ -32,6 +40,11 @@ public sealed record GenerationOptions
         if (TopP <= 0 || TopP > 1 || double.IsNaN(TopP))
         {
             throw new ArgumentOutOfRangeException(nameof(TopP));
+        }
+
+        if (RepetitionPenalty < 1 || double.IsNaN(RepetitionPenalty) || double.IsInfinity(RepetitionPenalty))
+        {
+            throw new ArgumentOutOfRangeException(nameof(RepetitionPenalty));
         }
     }
 }
