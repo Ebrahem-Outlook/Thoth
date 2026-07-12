@@ -1,32 +1,38 @@
-# Decoder-Only Transformer Foundation
+# Thoth Transformer
 
-Thoth includes a from-random-weights decoder-only Transformer foundation. It is implemented for correctness and local experimentation, not as a claim of frontier-level intelligence.
+Thoth has two Transformer-related implementations:
 
-## Implemented
+- `TransformerLanguageModel`: the earlier deterministic array implementation. It remains useful for educational/reference CPU checks, but it must not be described as the real full-parameter training architecture.
+- `TorchTransformerLanguageModel`: the TorchSharp CPU autograd implementation introduced for true trainable parameter updates.
 
-- learned token embeddings;
-- RMSNorm;
-- multi-head causal self-attention;
-- RoPE rotation;
-- SwiGLU feed-forward blocks;
-- residual connections;
-- causal masking;
-- stable seeded initialization;
-- next-token cross-entropy evaluation;
-- AdamW updates for the language modeling head;
-- checkpoint save/load including optimizer moments;
-- deterministic CPU tests for shape, causality, training loss reduction, checkpoint round-trip, resume, generation bounds, tokenizer round-trip, and non-finite failure handling.
+## TorchSharp Core
 
-## Configurations
+The TorchSharp path currently includes:
 
-- Tiny: 2 layers, width 128, 4 heads, context 128.
-- Bootstrap: 8 layers, width 512, 8 heads, FFN 2048, context 1024.
+- token embeddings;
+- pre-norm RMSNorm;
+- multi-head causal attention;
+- RoPE;
+- SwiGLU feed-forward layers;
+- final RMSNorm;
+- LM head;
+- cross-entropy with padding ignored;
+- dropout path when configured;
+- manual AdamW update over TorchSharp gradients;
+- CPU correctness tests for finite gradients, parameter updates, shape, causal isolation, padding masking, determinism, and loss reduction.
 
-Tests use smaller CPU-only configs so CI stays fast.
+The pinned dependency is `TorchSharp-cpu` `0.107.0`.
 
-## Limitations
+## Not Complete Yet
 
-The current trainer updates the LM head and bias while the Transformer stack participates in forward inference. This is enough for CPU correctness and checkpoint lifecycle tests, but it is not full end-to-end Transformer pretraining. Full backpropagation through attention and FFN weights is a future training milestone.
+This is not a production-qualified Transformer runtime yet. Remaining Phase 6 work includes:
 
-Do not describe a checkpoint as capable or generally intelligent until it has been trained on appropriate data and has passed the quality gate.
+- checkpoint round-trip for Torch tensors;
+- resume state for optimizer/scheduler/RNG;
+- KV-cache generation and cache-equivalence tests;
+- top-k/top-p/repetition-penalty generation;
+- mixed precision and CUDA configuration;
+- full trainer/data-loader integration with gradient accumulation;
+- all mandatory acceptance tests from the master prompt.
 
+Until those gates pass, Thoth must not claim a trained or qualified Transformer checkpoint.
