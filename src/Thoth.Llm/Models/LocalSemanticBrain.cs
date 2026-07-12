@@ -186,10 +186,18 @@ internal static class LocalSemanticBrain
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(8)
             .ToArray();
-        var evidence = RankEvidence(goal, observations)
+        var rankedEvidence = RankEvidence(goal, observations)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .Take(10)
             .ToArray();
+        var researchTask = LooksLikeResearchTask(goal.ToLowerInvariant(), goal);
+        var evidence = researchTask
+            ? ExtractResearchEvidence(observations)
+                .Concat(rankedEvidence.Where(IsResearchEvidenceLine))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(10)
+                .ToArray()
+            : rankedEvidence;
 
         return new ObservationInsights(routes, tools, files, symbols, failures, evidence);
     }
@@ -216,149 +224,300 @@ internal static class LocalSemanticBrain
         AppendToolSummary(builder, signal, insights);
         AppendNextMove(builder, signal, insights);
 
-        return builder.ToString().Trim();
+        return RefineEvidenceAnswer(goal, builder.ToString(), signal, insights).Trim();
     }
 
     public static string BuildDirectReply(string text, bool hasImage)
     {
-        var signal = AnalyzeGoal(text);
+        var frame = BuildCognitiveFrame(text, hasImage);
+        var answer = DraftDirectAnswer(frame);
+
+        for (var cycle = 1; cycle <= 3; cycle++)
+        {
+            var critique = CritiqueDraft(frame, answer);
+            answer = ImproveDraft(frame, answer, critique, cycle);
+            if (critique.Issues.Count == 0)
+            {
+                break;
+            }
+        }
+
+        return answer.Trim();
+    }
+
+    private static CognitiveFrame BuildCognitiveFrame(string text, bool hasImage)
+    {
+        var cleaned = string.IsNullOrWhiteSpace(text) ? "(empty message)" : text.Trim();
+        var signal = AnalyzeGoal(cleaned);
+        var clauses = SplitClauses(cleaned).Take(8).ToArray();
+        var constraints = ExtractConstraints(cleaned).Take(8).ToArray();
+        var questionKind = InferQuestionKind(cleaned.ToLowerInvariant(), cleaned, signal);
+
+        return new CognitiveFrame(
+            cleaned,
+            signal,
+            clauses,
+            signal.Keywords,
+            constraints,
+            questionKind,
+            hasImage);
+    }
+
+    private static string DraftDirectAnswer(CognitiveFrame frame)
+    {
+        var arabic = frame.Signal.Language == "ar";
         var builder = new StringBuilder();
 
-        if (IsUnderstandingCheck(text.ToLowerInvariant(), text))
+        builder.AppendLine(arabic ? "\u062a\u0641\u0643\u064a\u0643 recursive:" : "Recursive parse:");
+        builder.AppendLine(arabic
+            ? $"- \u0627\u0644\u0637\u0644\u0628: {SingleLine(frame.Text, 180)}"
+            : $"- Request: {SingleLine(frame.Text, 180)}");
+        builder.AppendLine(arabic
+            ? $"- \u0627\u0644\u0645\u0648\u0636\u0648\u0639/\u0627\u0644\u0641\u0639\u0644: {frame.Signal.Topic} / {frame.Signal.Action} ({frame.Signal.Confidence:0.00})"
+            : $"- Topic/action: {frame.Signal.Topic} / {frame.Signal.Action} ({frame.Signal.Confidence:0.00})");
+
+        if (frame.Clauses.Count > 0)
         {
-            return signal.Language == "ar"
-                ? "\u0623\u064a\u0648\u0647 \u0641\u0627\u0647\u0645\u0643. \u0627\u0644\u0644\u064a \u0628\u062a\u0633\u0623\u0644\u0647 \u0647\u0646\u0627 \u0645\u0634 \u0645\u0647\u0645\u0629 \u0628\u0627\u0643 \u0623\u0648 \u0643\u0648\u062f\u060c \u062f\u0647 \u0633\u0624\u0627\u0644 \u0639\u0627\u062f\u064a \u0648\u0647\u0631\u062f \u0639\u0644\u064a\u0647 \u0639\u0644\u0649 \u0647\u0630\u0627 \u0627\u0644\u0623\u0633\u0627\u0633."
-                : "Yes, I understand you. This is normal conversation, not a workspace task, so I should answer directly without running tools.";
+            builder.AppendLine(arabic
+                ? $"- \u0627\u0644\u0623\u062c\u0632\u0627\u0621: {string.Join(" | ", frame.Clauses.Select(clause => SingleLine(clause, 90)))}"
+                : $"- Clauses: {string.Join(" | ", frame.Clauses.Select(clause => SingleLine(clause, 90)))}");
         }
 
-        if (!signal.RequiresTools)
+        if (frame.FocusTerms.Count > 0)
         {
-            if (signal.Topic == "coding")
-            {
-                return BuildCleanGenericCodeReply(signal.Language == "ar");
-            }
-
-            return signal.Language == "ar"
-                ? "\u0641\u0627\u0647\u0645\u0643. \u062f\u0647 \u0643\u0644\u0627\u0645 \u0639\u0627\u062f\u064a\u060c \u0641\u0647\u0631\u062f \u0639\u0644\u064a\u0643 \u0645\u0628\u0627\u0634\u0631\u0629 \u0645\u0646 \u063a\u064a\u0631 \u062a\u0634\u063a\u064a\u0644 \u0623\u062f\u0648\u0627\u062a \u0623\u0648 \u062a\u062e\u0645\u064a\u0646 \u0625\u0646\u0647 \u0637\u0644\u0628 \u0643\u0648\u062f."
-                : "I understand. This is normal conversation, so I should answer directly without running tools or pretending it is a code task.";
+            builder.AppendLine(arabic
+                ? $"- \u0643\u0644\u0645\u0627\u062a \u0645\u062d\u0648\u0631\u064a\u0629: {string.Join(", ", frame.FocusTerms.Take(6))}"
+                : $"- Focus terms: {string.Join(", ", frame.FocusTerms.Take(6))}");
         }
 
-        if (signal.Language == "ar")
+        if (frame.Constraints.Count > 0)
         {
-            builder.AppendLine(signal.Topic == "research"
-                ? "\u0641\u0627\u0647\u0645\u0643. \u062f\u0647 \u0637\u0644\u0628 \u0628\u062d\u062b \u0639\u0644\u0649 \u0627\u0644\u0648\u064a\u0628\u060c \u0641\u0627\u0644\u0635\u062d \u0625\u0646\u064a \u0623\u0634\u063a\u0644 \u0623\u062f\u0627\u0629 \u0627\u0644\u0628\u062d\u062b \u0648\u0623\u0642\u0631\u0623 \u0645\u0635\u0627\u062f\u0631 \u0642\u0628\u0644 \u0645\u0627 \u0623\u0644\u062e\u0635."
-                : "\u0641\u0627\u0647\u0645\u0643. \u062f\u0647 \u0628\u0627\u064a\u0646 \u0637\u0644\u0628 \u0639\u0644\u0649 \u0627\u0644\u0645\u0634\u0631\u0648\u0639\u060c \u0641\u0627\u0644\u0635\u062d \u0625\u0646\u064a \u0623\u0641\u062d\u0635 \u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0648\u0627\u0644\u0623\u062f\u0648\u0627\u062a \u0642\u0628\u0644 \u0627\u0644\u0631\u062f.");
+            builder.AppendLine(arabic
+                ? $"- \u0642\u064a\u0648\u062f: {string.Join(" | ", frame.Constraints.Select(item => SingleLine(item, 90)))}"
+                : $"- Constraints: {string.Join(" | ", frame.Constraints.Select(item => SingleLine(item, 90)))}");
         }
-        else
+
+        builder.AppendLine(arabic
+            ? $"- \u064a\u062d\u062a\u0627\u062c \u0623\u062f\u0648\u0627\u062a: {(frame.Signal.RequiresTools ? "\u0646\u0639\u0645" : "\u0644\u0627")}"
+            : $"- Needs tools: {(frame.Signal.RequiresTools ? "yes" : "no")}");
+
+        if (frame.HasImage)
         {
-            builder.AppendLine(signal.Topic == "research"
-                ? "I understand the request. This needs web research, so I should search, read sources, and cite URLs before answering."
-                : "I understand the request. This looks project-related, so I should inspect local files and tool output before answering.");
+            builder.AppendLine(arabic
+                ? "- \u0641\u064a\u0647 \u0645\u0631\u0641\u0642 \u0635\u0648\u0631\u0629: \u0623\u062d\u062a\u0627\u062c \u0637\u0628\u0642\u0629 \u0631\u0624\u064a\u0629 \u0645\u062d\u0644\u064a\u0629 \u0644\u0642\u0631\u0627\u0621\u0629 \u0627\u0644\u0628\u0643\u0633\u0644\u0627\u062a."
+                : "- Image attached: pixel-level reading needs the local vision layer.");
         }
 
         builder.AppendLine();
-        builder.AppendLine($"I read it as a {signal.Topic}/{signal.Action} task with confidence {signal.Confidence:0.00}.");
-
-        if (hasImage)
-        {
-            builder.AppendLine("The attachment is stored with the conversation; pixel-level interpretation still needs an internal vision module.");
-        }
-
-        builder.AppendLine(signal.Language == "ar"
-            ? signal.Topic == "research"
-                ? "\u0627\u0641\u062a\u062d Tools \u0648\u0647\u0627\u062f\u0648\u0631 \u0639\u0644\u0649 \u0627\u0644\u0648\u064a\u0628 \u0648\u0623\u0631\u062c\u0639\u0644\u0643 \u0628\u0645\u0644\u062e\u0635 \u0648\u0645\u0635\u0627\u062f\u0631."
-                : "\u0627\u0641\u062a\u062d Tools \u0648\u0627\u062f\u064a\u0646\u064a \u0647\u062f\u0641 \u0645\u062d\u062f\u062f\u060c \u0648\u0647\u062d\u0648\u0644\u0647 \u0644\u062e\u0637\u0629 \u0648\u062a\u0646\u0641\u064a\u0630."
-            : signal.Topic == "research"
-                ? "Keep Tools enabled and I will search the web, read sources, and return a sourced summary."
-                : "Keep Tools enabled and give me the concrete target; I will turn it into an inspect-plan-answer loop.");
+        builder.AppendLine(arabic ? "\u0627\u0644\u0631\u062f \u0628\u0639\u062f \u0623\u0648\u0644 \u0635\u064a\u0627\u063a\u0629:" : "Draft answer:");
+        builder.AppendLine(BuildAnswerCore(frame));
 
         return builder.ToString().Trim();
     }
 
-    private static string BuildCleanGenericCodeReply(bool arabic) =>
-        arabic
-            ? string.Join(Environment.NewLine,
-                "\u0623\u0643\u064a\u062f. \u0628\u0633 \u0627\u0644\u0637\u0644\u0628 \u0646\u0627\u0642\u0635 \u0623\u0647\u0645 \u062c\u0632\u0621: \u0627\u0644\u0645\u064a\u062b\u0648\u062f \u062a\u0639\u0645\u0644 \u0625\u064a\u0647 \u0628\u0627\u0644\u0636\u0628\u0637\u061f \u0644\u062d\u062f \u0645\u0627 \u062a\u062d\u062f\u062f \u0627\u0644\u0645\u0637\u0644\u0648\u0628\u060c \u062f\u0647 \u0642\u0627\u0644\u0628 C# \u0646\u0638\u064a\u0641 \u062a\u0642\u062f\u0631 \u062a\u0628\u0646\u064a \u0639\u0644\u064a\u0647:",
-                "",
-                "```csharp",
-                "public static bool TryNormalizeName(string? value, out string normalized)",
-                "{",
-                "    normalized = string.Empty;",
-                "",
-                "    if (string.IsNullOrWhiteSpace(value))",
-                "    {",
-                "        return false;",
-                "    }",
-                "",
-                "    normalized = value.Trim();",
-                "    return true;",
-                "}",
-                "```",
-                "",
-                "\u0627\u0628\u0639\u062a\u0644\u064a \u0627\u0633\u0645 \u0627\u0644\u0645\u064a\u062b\u0648\u062f\u060c \u0627\u0644\u0645\u062f\u062e\u0644\u0627\u062a\u060c \u0627\u0644\u0646\u0627\u062a\u062c \u0627\u0644\u0645\u062a\u0648\u0642\u0639\u060c \u0648\u0642\u0648\u0627\u0639\u062f \u0627\u0644\u0640 validation\u060c \u0648\u0623\u0646\u0627 \u0623\u0637\u0644\u0639\u0647\u0627 \u062c\u0627\u0647\u0632\u0629 \u0639\u0644\u0649 \u0627\u0644\u0645\u0637\u0644\u0648\u0628.")
-            : """
-              Sure. I need the method's purpose before I can write the exact version. Here is a clean C# template you can build from:
+    private static string BuildAnswerCore(CognitiveFrame frame)
+    {
+        var arabic = frame.Signal.Language == "ar";
+        return frame.QuestionKind switch
+        {
+            "capability" => arabic
+                ? "\u0623\u0642\u062f\u0631 \u0623\u0634\u062a\u063a\u0644 \u0643\u0640 agent \u0645\u062d\u0644\u064a: \u0623\u0641\u0647\u0645 \u0627\u0644\u0637\u0644\u0628\u060c \u0623\u0642\u0633\u0645\u0647 \u0644\u0623\u062c\u0632\u0627\u0621\u060c \u0623\u0633\u062a\u062e\u062f\u0645 \u0627\u0644\u0630\u0627\u0643\u0631\u0629 \u0648\u0627\u0644\u0645\u0644\u0641\u0627\u062a \u0648\u0627\u0644\u0648\u064a\u0628 \u0644\u0645\u0627 \u0627\u0644\u0623\u062f\u0648\u0627\u062a \u062a\u0643\u0648\u0646 \u0645\u062a\u0627\u062d\u0629\u060c \u062b\u0645 \u0623\u0631\u0627\u062c\u0639 \u0627\u0644\u0631\u062f \u0642\u0628\u0644 \u0645\u0627 \u0623\u0631\u062c\u0639\u0647."
+                : "I can work as a local agent: parse the request, split it into parts, use memory/files/web when tools are available, then review the answer before returning it.",
+            "code" => arabic
+                ? "\u062f\u0647 \u0637\u0644\u0628 \u0643\u0648\u062f. \u0627\u0644\u0639\u0642\u0644 \u0647\u064a\u0628\u0646\u064a \u0639\u0642\u062f \u0627\u0644\u0645\u064a\u062b\u0648\u062f \u0623\u0648\u0644\u0627: \u0627\u0644\u0627\u0633\u0645\u060c \u0627\u0644\u0645\u062f\u062e\u0644\u0627\u062a\u060c \u0627\u0644\u062e\u0631\u062c\u060c \u0648\u0642\u0648\u0627\u0639\u062f validation. \u0645\u0646 \u063a\u064a\u0631 \u0627\u0644\u0645\u0648\u0627\u0635\u0641\u0627\u062a \u062f\u064a \u0645\u0634 \u0647\u0631\u0645\u064a \u0642\u0627\u0644\u0628 \u0645\u062d\u0641\u0648\u0638\u061b \u0647\u0637\u0644\u0628 \u0627\u0644\u0646\u0627\u0642\u0635 \u0623\u0648 \u0623\u0628\u0646\u064a \u0623\u0635\u063a\u0631 \u0639\u0642\u062f \u0622\u0645\u0646."
+                : "This is a code request. The brain should build the method contract first: name, inputs, output, and validation rules. Without that contract I should not throw a saved template at you; I should ask for the missing parts or derive the smallest safe contract.",
+            "research" => arabic
+                ? "\u062f\u0647 \u0645\u062d\u062a\u0627\u062c \u0628\u062d\u062b \u0641\u0639\u0644\u064a: \u0623\u062d\u062f\u062f \u0643\u0644\u0645\u0627\u062a \u0627\u0644\u0628\u062d\u062b\u060c \u0623\u0642\u0631\u0623 \u0645\u0635\u0627\u062f\u0631\u060c \u0623\u0644\u062e\u0635 \u0627\u0644\u0646\u0642\u0627\u0637\u060c \u0648\u0623\u0631\u0627\u062c\u0639 \u0627\u0644\u0645\u0644\u062e\u0635 \u0642\u0628\u0644 \u0627\u0644\u0631\u062f. \u0644\u0648 Tools \u0645\u0641\u0639\u0644\u0629 \u0647\u064a\u062a\u0646\u0641\u0630 web.research \u0628\u062f\u0644 \u0627\u0644\u062a\u062e\u0645\u064a\u0646."
+                : "This needs real research: choose search terms, read sources, summarize the points, and review the summary before answering. With tools enabled, this should call web.research instead of guessing.",
+            "tool" => arabic
+                ? "\u062f\u0647 \u0645\u0631\u062a\u0628\u0637 \u0628\u0633\u064a\u0627\u0642 \u0623\u0648 \u0645\u0634\u0631\u0648\u0639. \u0627\u0644\u0645\u0633\u0627\u0631 \u0627\u0644\u0635\u062d: \u0623\u0642\u0631\u0623 \u0627\u0644\u0645\u0644\u0641\u0627\u062a/\u0627\u0644\u0630\u0627\u0643\u0631\u0629/\u0627\u0644\u0623\u062f\u0648\u0627\u062a\u060c \u0623\u0633\u062a\u062e\u0631\u062c \u0627\u0644\u062f\u0644\u064a\u0644\u060c \u0623\u0628\u0646\u064a \u062e\u0637\u0629 \u0635\u063a\u064a\u0631\u0629\u060c \u062b\u0645 \u0623\u0631\u062f \u0628\u062a\u0634\u062e\u064a\u0635 \u0623\u0648 \u062a\u0646\u0641\u064a\u0630."
+                : "This is context-bound. The right path is to read files/memory/tools, extract evidence, build a small plan, then answer with diagnosis or implementation.",
+            _ => arabic
+                ? $"\u0623\u0646\u0627 \u0645\u062a\u0627\u0628\u0639 \u0645\u0639\u0646\u0649 \u0643\u0644\u0627\u0645\u0643: {frame.Signal.Summary}. \u0647\u0631\u062f \u0639\u0644\u0649 \u0627\u0644\u0645\u0639\u0646\u0649 \u0627\u0644\u0645\u062a\u0641\u0647\u0645\u060c \u0648\u0644\u0648 \u0628\u0642\u0649 \u0641\u064a\u0647 \u0647\u062f\u0641 \u062a\u0646\u0641\u064a\u0630\u064a \u0647\u0643\u0633\u0631\u0647 \u0644\u062e\u0637\u0648\u0627\u062a."
+                : $"I am tracking the meaning of your message: {frame.Signal.Summary}. I will answer the understood intent, and if it becomes an implementation target I will break it into steps."
+        };
+    }
 
-              ```csharp
-              public static bool TryNormalizeName(string? value, out string normalized)
-              {
-                  normalized = string.Empty;
+    private static CognitiveCritique CritiqueDraft(CognitiveFrame frame, string answer)
+    {
+        var issues = new List<string>();
 
-                  if (string.IsNullOrWhiteSpace(value))
-                  {
-                      return false;
-                  }
+        if (!answer.Contains(frame.Signal.Topic, StringComparison.OrdinalIgnoreCase) &&
+            !answer.Contains(frame.Signal.Action, StringComparison.OrdinalIgnoreCase))
+        {
+            issues.Add("classification_not_visible");
+        }
 
-                  normalized = value.Trim();
-                  return true;
-              }
-              ```
+        if (frame.FocusTerms.Count > 0 &&
+            !frame.FocusTerms.Take(3).Any(term => answer.Contains(term, StringComparison.OrdinalIgnoreCase)))
+        {
+            issues.Add("focus_terms_missing");
+        }
 
-              Send me the method name, inputs, expected return value, and validation rules, and I will write the final method.
-              """;
+        if (frame.HasImage &&
+            !ContainsAny(answer, "image", "attachment", "\u0635\u0648\u0631\u0629", "\u0645\u0631\u0641\u0642"))
+        {
+            issues.Add("image_not_acknowledged");
+        }
 
-    private static string BuildGenericCodeReply(bool arabic) =>
-        arabic
-            ? """
-              أكيد. بس الطلب ناقص أهم جزء: الميثود تعمل إيه بالضبط؟ لحد ما تحدد المطلوب، ده قالب C# نظيف تقدر تبني عليه:
+        if (frame.Signal.RequiresTools &&
+            !ContainsAny(answer, "tool", "web.research", "files", "memory", "\u0623\u062f\u0648\u0627\u062a", "\u0645\u0644\u0641\u0627\u062a", "\u0648\u064a\u0628", "\u0630\u0627\u0643\u0631\u0629"))
+        {
+            issues.Add("tool_path_missing");
+        }
 
-              ```csharp
-              public static bool TryNormalizeName(string? value, out string normalized)
-              {
-                  normalized = string.Empty;
+        if (frame.QuestionKind == "code" &&
+            !ContainsAny(answer, "inputs", "output", "validation", "contract", "\u0645\u062f\u062e\u0644\u0627\u062a", "\u062e\u0631\u062c", "\u0627\u0644\u0645\u064a\u062b\u0648\u062f"))
+        {
+            issues.Add("code_contract_missing");
+        }
 
-                  if (string.IsNullOrWhiteSpace(value))
-                  {
-                      return false;
-                  }
+        if (frame.QuestionKind == "research" &&
+            !ContainsAny(answer, "source", "sources", "web", "research", "\u0645\u0635\u0627\u062f\u0631", "\u0648\u064a\u0628", "\u0628\u062d\u062b"))
+        {
+            issues.Add("research_path_missing");
+        }
 
-                  normalized = value.Trim();
-                  return true;
-              }
-              ```
+        var score = Math.Clamp(1 - issues.Count * 0.18, 0.2, 0.98);
+        return new CognitiveCritique(issues, score);
+    }
 
-              ابعتلي اسم الميثود، المدخلات، الناتج المتوقع، وقواعد الـ validation، وأنا أطلعها جاهزة على المطلوب.
-              """
-            : """
-              Sure. I need the method's purpose before I can write the exact version. Here is a clean C# template you can build from:
+    private static string ImproveDraft(CognitiveFrame frame, string answer, CognitiveCritique critique, int cycle)
+    {
+        var arabic = frame.Signal.Language == "ar";
+        var builder = new StringBuilder(answer.Trim());
+        builder.AppendLine();
+        builder.AppendLine();
 
-              ```csharp
-              public static bool TryNormalizeName(string? value, out string normalized)
-              {
-                  normalized = string.Empty;
+        if (critique.Issues.Count == 0)
+        {
+            builder.AppendLine(arabic
+                ? $"\u0645\u0631\u0627\u062c\u0639\u0629 recursive {cycle}: \u0627\u0644\u0635\u064a\u0627\u063a\u0629 \u0645\u062a\u0645\u0627\u0633\u0643\u0629\u060c \u0648\u0627\u0644\u0631\u062f \u0645\u0631\u062a\u0628\u0637 \u0628\u0627\u0644\u0641\u0647\u0645 \u0645\u0634 \u0628\u0642\u0627\u0644\u0628 \u0645\u062d\u0641\u0648\u0638."
+                : $"Recursive self-check {cycle}: the answer is coherent and tied to the parsed intent, not a saved template.");
+            return builder.ToString().Trim();
+        }
 
-                  if (string.IsNullOrWhiteSpace(value))
-                  {
-                      return false;
-                  }
+        builder.AppendLine(arabic
+            ? $"\u0645\u0631\u0627\u062c\u0639\u0629 recursive {cycle}: \u0627\u062a\u0644\u0642\u0637 {critique.Issues.Count} \u0646\u0642\u0637\u0629 \u0648\u0627\u062a\u0635\u0644\u062d\u062a \u0641\u064a \u0627\u0644\u0635\u064a\u0627\u063a\u0629."
+            : $"Recursive self-check {cycle}: found {critique.Issues.Count} issue(s) and patched the wording.");
 
-                  normalized = value.Trim();
-                  return true;
-              }
-              ```
+        foreach (var issue in critique.Issues)
+        {
+            builder.AppendLine(arabic
+                ? $"- \u062a\u0635\u062d\u064a\u062d: {DescribeIssue(issue, true, frame)}"
+                : $"- Patch: {DescribeIssue(issue, false, frame)}");
+        }
 
-              Send me the method name, inputs, expected return value, and validation rules, and I will write the final method.
-              """;
+        return builder.ToString().Trim();
+    }
+
+    private static string DescribeIssue(string issue, bool arabic, CognitiveFrame frame) =>
+        issue switch
+        {
+            "classification_not_visible" => arabic
+                ? $"\u0627\u0644\u062a\u0635\u0646\u064a\u0641 \u0647\u0648 {frame.Signal.Topic}/{frame.Signal.Action}."
+                : $"The classification is {frame.Signal.Topic}/{frame.Signal.Action}.",
+            "focus_terms_missing" => arabic
+                ? $"\u0627\u0644\u0643\u0644\u0645\u0627\u062a \u0627\u0644\u0645\u062d\u0648\u0631\u064a\u0629: {string.Join(", ", frame.FocusTerms.Take(5))}."
+                : $"Focus terms: {string.Join(", ", frame.FocusTerms.Take(5))}.",
+            "image_not_acknowledged" => arabic
+                ? "\u0627\u0644\u0631\u0633\u0627\u0644\u0629 \u0641\u064a\u0647\u0627 \u0635\u0648\u0631\u0629 \u0645\u0631\u0641\u0642\u0629 \u0648\u062a\u062d\u062a\u0627\u062c \u0642\u0631\u0627\u0621\u0629 \u0631\u0624\u064a\u0629."
+                : "The message includes an image attachment that needs vision reading.",
+            "tool_path_missing" => arabic
+                ? "\u0627\u0644\u0637\u0644\u0628 \u064a\u062d\u062a\u0627\u062c \u0623\u062f\u0648\u0627\u062a: \u0645\u0644\u0641\u0627\u062a\u060c \u0630\u0627\u0643\u0631\u0629\u060c \u0623\u0648 \u0648\u064a\u0628 \u062d\u0633\u0628 \u0627\u0644\u0633\u064a\u0627\u0642."
+                : "The request needs tools: files, memory, or web depending on context.",
+            "code_contract_missing" => arabic
+                ? "\u0639\u0642\u062f \u0627\u0644\u0643\u0648\u062f \u0644\u0627\u0632\u0645 \u064a\u062d\u062f\u062f \u0627\u0644\u0627\u0633\u0645\u060c \u0627\u0644\u0645\u062f\u062e\u0644\u0627\u062a\u060c \u0627\u0644\u062e\u0631\u062c\u060c \u0648\u0642\u0648\u0627\u0639\u062f validation."
+                : "The code contract needs name, inputs, output, and validation rules.",
+            "research_path_missing" => arabic
+                ? "\u0627\u0644\u0628\u062d\u062b \u0644\u0627\u0632\u0645 \u064a\u062c\u064a \u0645\u0646 \u0645\u0635\u0627\u062f\u0631 \u0648\u064a\u0628 \u0645\u0642\u0631\u0648\u0621\u0629."
+                : "Research must come from read web sources.",
+            _ => arabic ? "\u062a\u062d\u0633\u064a\u0646 \u0627\u0644\u0635\u064a\u0627\u063a\u0629." : "Improve wording."
+        };
+
+    private static string RefineEvidenceAnswer(string goal, string answer, BrainSignal signal, ObservationInsights insights)
+    {
+        var refined = answer.Trim();
+        var arabic = signal.Language == "ar";
+        var issues = new List<string>();
+
+        if (insights.ToolNames.Count > 0 &&
+            !ContainsAny(refined, "Checked", "\u0641\u062d\u0635\u062a", "\u0627\u0633\u062a\u062e\u062f\u0645\u062a"))
+        {
+            issues.Add(arabic
+                ? "\u0623\u0636\u0641\u062a \u0625\u0634\u0627\u0631\u0629 \u0623\u0648\u0636\u062d \u0644\u0644\u0623\u062f\u0648\u0627\u062a \u0627\u0644\u0645\u0633\u062a\u062e\u062f\u0645\u0629."
+                : "Made the used tools clearer.");
+        }
+
+        if (signal.Topic == "research" &&
+            !ContainsAny(refined, "source", "Web evidence", "\u0645\u0635\u0627\u062f\u0631", "\u0627\u0644\u0648\u064a\u0628"))
+        {
+            issues.Add(arabic
+                ? "\u0631\u0628\u0637\u062a \u0627\u0644\u0645\u0644\u062e\u0635 \u0628\u0645\u0633\u0627\u0631 \u0627\u0644\u0645\u0635\u0627\u062f\u0631."
+                : "Connected the summary to source evidence.");
+        }
+
+        if (!ContainsAny(refined, "Next best move", "\u0627\u0644\u062e\u0637\u0648\u0629 \u0627\u0644\u062c\u0627\u064a\u0629"))
+        {
+            issues.Add(arabic
+                ? "\u0623\u0636\u0641\u062a \u0646\u0642\u0637\u0629 \u062a\u0646\u0641\u064a\u0630\u064a\u0629 \u062a\u062e\u0644\u064a \u0627\u0644\u0631\u062f \u0642\u0627\u0628\u0644 \u0644\u0644\u062a\u062d\u0631\u0643."
+                : "Added an actionable next step.");
+        }
+
+        var reviewLine = issues.Count == 0
+            ? arabic
+                ? "\u0645\u0631\u0627\u062c\u0639\u0629 recursive: \u0627\u0644\u0625\u062c\u0627\u0628\u0629 \u0627\u062a\u0631\u0627\u062c\u0639\u062a \u0645\u062d\u0644\u064a\u0627 \u0628\u0639\u062f \u0627\u0644\u0623\u062f\u0644\u0629."
+                : "Recursive answer check: reviewed locally after evidence collection."
+            : arabic
+                ? $"\u0645\u0631\u0627\u062c\u0639\u0629 recursive: {string.Join(" ", issues)}"
+                : $"Recursive answer check: {string.Join(" ", issues)}";
+
+        return $"{refined}{Environment.NewLine}{Environment.NewLine}{reviewLine}";
+    }
+
+    private static IReadOnlyList<string> SplitClauses(string text) =>
+        Regex.Split(text, "[\\r\\n]+|(?<=[\\.\\?!;:\\u060C\\u061B\\u061F])\\s+|[,;\\u060C\\u061B]+")
+            .Select(part => part.Trim())
+            .Where(part => part.Length > 0)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+
+    private static IReadOnlyList<string> ExtractConstraints(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        return SplitClauses(text)
+            .Where(clause =>
+            {
+                var item = clause.ToLowerInvariant();
+                return ContainsAny(item, "without", "never", "must", "local", "external", "source", "cite", "web", "recursive", "perfect") ||
+                       ContainsAny(clause, "\u0645\u0646 \u063a\u064a\u0631", "\u0644\u0627\u0632\u0645", "\u0645\u062d\u0644\u064a", "\u062e\u0627\u0631\u062c\u064a", "\u0645\u0635\u0627\u062f\u0631", "\u0648\u064a\u0628", "\u0627\u0644\u0646\u062a", "\u064a\u0643\u0633\u0631", "\u064a\u0641\u0647\u0645");
+            })
+            .DefaultIfEmpty(ContainsAny(lower, "local", "recursive") ? SingleLine(text, 140) : string.Empty)
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private static string InferQuestionKind(string lower, string text, BrainSignal signal)
+    {
+        var scores = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["conversation"] = signal.Action == "chat" ? 2 : 0,
+            ["capability"] = ContainsAny(lower, "what can you do", "capabilities", "who are you") ||
+                              ContainsAny(text, "\u062a\u0642\u062f\u0631 \u062a\u0639\u0645\u0644 \u0627\u064a\u0647", "\u0627\u0646\u062a \u0645\u064a\u0646", "\u0633\u0627\u0639\u062f\u0646\u064a") ? 4 : 0,
+            ["code"] = signal.Topic == "coding" || LooksLikeGenericCodeGeneration(lower, text) ? 4 : 0,
+            ["research"] = signal.Topic == "research" ? 5 : 0,
+            ["tool"] = signal.RequiresTools ? 4 : 0,
+            ["understanding"] = IsUnderstandingCheck(lower, text) ? 4 : 0
+        };
+
+        var best = scores
+            .OrderByDescending(pair => pair.Value)
+            .ThenBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+            .FirstOrDefault(pair => pair.Value > 0);
+
+        return best.Value > 0 ? best.Key : "general";
+    }
 
     private static void AppendUnderstanding(StringBuilder builder, BrainSignal signal)
     {
@@ -557,6 +716,42 @@ internal static class LocalSemanticBrain
             .OrderByDescending(item => item.Score)
             .Select(item => item.Line);
     }
+
+    private static IEnumerable<string> ExtractResearchEvidence(string observations)
+    {
+        var capture = false;
+        foreach (var rawLine in ExtractLines(observations))
+        {
+            var line = SingleLine(rawLine, 220);
+            if (line.Contains("Tool: web.research", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Research query:", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Search results:", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains("Read summaries:", StringComparison.OrdinalIgnoreCase))
+            {
+                capture = true;
+            }
+            else if (line.Contains("Tool: memory.", StringComparison.OrdinalIgnoreCase) ||
+                     line.Contains("Tool: workspace.", StringComparison.OrdinalIgnoreCase) ||
+                     line.Contains("Tool: file.", StringComparison.OrdinalIgnoreCase))
+            {
+                capture = false;
+            }
+
+            if (capture && IsResearchEvidenceLine(line))
+            {
+                yield return line;
+            }
+        }
+    }
+
+    private static bool IsResearchEvidenceLine(string line) =>
+        line.Contains("Research query:", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("Search query:", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("Source:", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("URL:", StringComparison.OrdinalIgnoreCase) ||
+        line.Contains("Snippet:", StringComparison.OrdinalIgnoreCase) ||
+        line.StartsWith("Source ", StringComparison.OrdinalIgnoreCase) ||
+        line.StartsWith("- ", StringComparison.OrdinalIgnoreCase) && !line.Contains("memory.", StringComparison.OrdinalIgnoreCase);
 
     private static IEnumerable<string> ExtractLines(string text) =>
         text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
@@ -836,6 +1031,17 @@ internal static class LocalSemanticBrain
         "\u0641\u064a",
         "\u0639\u0644\u0649"
     ];
+
+    private sealed record CognitiveFrame(
+        string Text,
+        BrainSignal Signal,
+        IReadOnlyList<string> Clauses,
+        IReadOnlyList<string> FocusTerms,
+        IReadOnlyList<string> Constraints,
+        string QuestionKind,
+        bool HasImage);
+
+    private sealed record CognitiveCritique(IReadOnlyList<string> Issues, double Score);
 
     private sealed record TrainingExample(string Label, string Text);
 

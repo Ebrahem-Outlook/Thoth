@@ -39,7 +39,13 @@ internal static class WebLookup
             throw new HttpRequestException($"Search request failed: {(int)response.StatusCode} {response.ReasonPhrase}");
         }
 
-        return ParseSearchResults(html, maxResults);
+        var results = ParseSearchResults(html, maxResults);
+        if (IsSearchGate(html, results))
+        {
+            return await SearchBingAsync(httpClient, query, maxResults, cancellationToken);
+        }
+
+        return results;
     }
 
     public static async Task<WebPageReadResult> ReadAsync(
@@ -203,7 +209,55 @@ internal static class WebLookup
             return;
         }
 
+        if (IsSearchEngineSelfLink(uri, title))
+        {
+            return;
+        }
+
         results.Add(new WebSearchResult(title, uri.ToString(), snippet));
+    }
+
+    private static async Task<IReadOnlyList<WebSearchResult>> SearchBingAsync(
+        HttpClient httpClient,
+        string query,
+        int maxResults,
+        CancellationToken cancellationToken)
+    {
+        using var request = new HttpRequestMessage(
+            HttpMethod.Get,
+            new Uri($"https://www.bing.com/search?q={Uri.EscapeDataString(query)}"));
+        ApplyBrowserHeaders(request);
+
+        using var response = await httpClient.SendAsync(request, cancellationToken);
+        var html = await response.Content.ReadAsStringAsync(cancellationToken);
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new HttpRequestException($"Fallback search request failed: {(int)response.StatusCode} {response.ReasonPhrase}");
+        }
+
+        return ParseSearchResults(html, maxResults);
+    }
+
+    private static bool IsSearchGate(string html, IReadOnlyList<WebSearchResult> results) =>
+        results.Count == 0 ||
+        html.Contains("Protection. Privacy. Peace of mind", StringComparison.OrdinalIgnoreCase) ||
+        html.Contains("anomaly", StringComparison.OrdinalIgnoreCase) ||
+        results.All(result =>
+            Uri.TryCreate(result.Url, UriKind.Absolute, out var uri) &&
+            IsSearchEngineSelfLink(uri, result.Title));
+
+    private static bool IsSearchEngineSelfLink(Uri uri, string title)
+    {
+        var host = uri.Host.ToLowerInvariant();
+        if (!host.Contains("duckduckgo.com") && !host.Contains("bing.com"))
+        {
+            return false;
+        }
+
+        return title.Equals("here", StringComparison.OrdinalIgnoreCase) ||
+               title.Contains("DuckDuckGo", StringComparison.OrdinalIgnoreCase) ||
+               title.Contains("Bing", StringComparison.OrdinalIgnoreCase) ||
+               uri.AbsolutePath is "/" or "";
     }
 
     private static string ExtractSnippet(string block)

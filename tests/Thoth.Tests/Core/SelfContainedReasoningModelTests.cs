@@ -16,7 +16,9 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("Hey", response.Content);
+        Assert.Contains("Recursive parse:", response.Content);
+        Assert.Contains("Recursive self-check", response.Content);
+        Assert.DoesNotContain("Hey, I am here", response.Content);
         Assert.DoesNotContain("self-contained mode", response.Content, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -30,7 +32,8 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("workspace inspection", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Recursive parse:", response.Content);
+        Assert.Contains("local agent", response.Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("tools", response.Content, StringComparison.OrdinalIgnoreCase);
     }
 
@@ -78,7 +81,8 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("\u0641\u0627\u0647\u0645\u0643", response.Content);
+        Assert.Contains("\u062a\u0641\u0643\u064a\u0643 recursive", response.Content);
+        Assert.Contains("\u0645\u0631\u0627\u062c\u0639\u0629 recursive", response.Content);
         Assert.DoesNotContain("I read it as", response.Content);
         Assert.DoesNotContain("Detected topic", response.Content);
     }
@@ -187,8 +191,11 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("```csharp", response.Content, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("public static", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\u0627\u0644\u0645\u064a\u062b\u0648\u062f", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("validation", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\u0645\u0631\u0627\u062c\u0639\u0629 recursive", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("```csharp", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("public static", response.Content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("HTTP routes", response.Content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("\u0641\u062d\u0635\u062a \u0645\u062d\u0644\u064a\u0627", response.Content, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("route map", response.Content, StringComparison.OrdinalIgnoreCase);
@@ -267,6 +274,47 @@ public sealed class SelfContainedReasoningModelTests
     }
 
     [Fact]
+    public async Task CompleteAsync_FinalResearchAnswerPrefersWebEvidenceOverMemoryNoise()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.User, """
+                Goal:
+                search the web for LangGraph and summarize it
+
+                Observations:
+                Tool: web.research
+                Succeeded: True
+                Research query: LangGraph
+                Search results:
+                Source: Bing HTML
+                1. LangGraph docs
+                   URL: https://langchain-ai.github.io/langgraph/
+                   Snippet: LangGraph helps build stateful agents with graph workflows.
+                Read summaries:
+                Source 1: LangGraph docs
+                URL: https://langchain-ai.github.io/langgraph/
+                - LangGraph supports durable, stateful agent workflows.
+                Tool: memory.search
+                Succeeded: True
+                old project memory about workspace.summary and file.search
+
+                Write a direct final answer.
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        Assert.Contains("https://langchain-ai.github.io/langgraph/", response.Content);
+        Assert.Contains("LangGraph", response.Content);
+        Assert.Contains("Recursive answer check", response.Content);
+        Assert.DoesNotContain("old project memory", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("workspace.summary", response.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task CompleteAsync_GenericArabicMethodReplyDoesNotContainMojibake()
     {
         var model = new SelfContainedReasoningModel();
@@ -276,7 +324,8 @@ public sealed class SelfContainedReasoningModelTests
             "thoth-self",
             0));
 
-        Assert.Contains("\u0623\u0643\u064a\u062f", response.Content);
+        Assert.Contains("\u0627\u0644\u0645\u064a\u062b\u0648\u062f", response.Content);
+        Assert.Contains("\u062a\u0641\u0643\u064a\u0643 recursive", response.Content);
         Assert.DoesNotContain("Ø", response.Content);
         Assert.DoesNotContain("Ù", response.Content);
     }

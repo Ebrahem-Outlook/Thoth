@@ -511,120 +511,9 @@ public sealed class SelfContainedReasoningModel : IChatModel
     {
         var lastUser = request.Messages.LastOrDefault(message => message.Role == ChatRole.User);
         var text = lastUser?.Content.Trim() ?? string.Empty;
-        var arabic = HasArabic(text);
         var hasImage = lastUser?.Attachments?.Any(attachment => attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) == true;
-        var lower = text.ToLowerInvariant();
-
-        if (IsGreeting(lower, text))
-        {
-            return arabic
-                ? "\u0623\u0647\u0644\u0627 \u064a\u0627 \u0645\u0639\u0644\u0645. \u0623\u0646\u0627 \u062c\u0627\u0647\u0632. \u0627\u0643\u062a\u0628\u0644\u064a \u0627\u0644\u0644\u064a \u0639\u0627\u064a\u0632 \u062a\u0628\u0646\u064a\u0647 \u0623\u0648 \u062a\u0635\u0644\u062d\u0647\u060c \u0648\u0644\u0648 \u0627\u0644\u0637\u0644\u0628 \u0639\u0644\u0649 \u0627\u0644\u0645\u0634\u0631\u0648\u0639 \u0647\u0634\u063a\u0644 \u0627\u0644\u0623\u062f\u0648\u0627\u062a \u0648\u0623\u0641\u062a\u0634 \u0641\u064a \u0627\u0644\u0645\u0644\u0641\u0627\u062a."
-                : "Hey, I am here. Tell me what you want to build, fix, inspect, or improve. If it touches the project, keep Tools enabled and I will inspect the workspace before answering.";
-        }
-
-        if (WantsCapabilities(lower, text))
-        {
-            return arabic
-                ? "\u0623\u0642\u062f\u0631 \u0623\u0633\u0627\u0639\u062f\u0643 \u0641\u064a \u0627\u0644\u0643\u0648\u062f\u060c \u0627\u0644\u0648\u0627\u062c\u0647\u0629\u060c \u0627\u0644\u0640 backend\u060c \u0645\u0631\u0627\u062c\u0639\u0629 \u0627\u0644\u0645\u0634\u0631\u0648\u0639\u060c \u0648\u062a\u0644\u062e\u064a\u0635 \u0627\u0644\u0645\u0644\u0641\u0627\u062a. \u0644\u0645\u0627 \u0627\u0644\u0637\u0644\u0628 \u064a\u062d\u062a\u0627\u062c \u0633\u064a\u0627\u0642\u060c \u0647\u0633\u062a\u062e\u062f\u0645 \u0623\u062f\u0648\u0627\u062a Thoth \u0627\u0644\u062f\u0627\u062e\u0644\u064a\u0629 \u0628\u062f\u0644 \u0627\u0644\u062a\u062e\u0645\u064a\u0646."
-                : "I can help with code, UI, backend APIs, project review, file analysis, memory, and workspace inspection. For anything project-related, I should use Thoth's tools first so the answer is based on the actual files instead of guessing.";
-        }
-
-        if (LooksLikeGenericCodeGeneration(lower, text) &&
-            !LooksLikeResearchTask(lower, text) &&
-            !LooksLikeProjectBoundTask(lower, text) &&
-            !LooksLikeFileTask(lower) &&
-            !LooksLikeCommandTask(lower))
-        {
-            return BuildCleanGenericCodeReply(arabic);
-        }
-
         return LocalSemanticBrain.BuildDirectReply(text, hasImage);
     }
-
-    private static string BuildCleanGenericCodeReply(bool arabic) =>
-        arabic
-            ? string.Join(Environment.NewLine,
-                "\u0623\u0643\u064a\u062f. \u0628\u0633 \u0627\u0644\u0637\u0644\u0628 \u0646\u0627\u0642\u0635 \u0623\u0647\u0645 \u062c\u0632\u0621: \u0627\u0644\u0645\u064a\u062b\u0648\u062f \u062a\u0639\u0645\u0644 \u0625\u064a\u0647 \u0628\u0627\u0644\u0636\u0628\u0637\u061f \u0644\u062d\u062f \u0645\u0627 \u062a\u062d\u062f\u062f \u0627\u0644\u0645\u0637\u0644\u0648\u0628\u060c \u062f\u0647 \u0642\u0627\u0644\u0628 C# \u0646\u0638\u064a\u0641 \u062a\u0642\u062f\u0631 \u062a\u0628\u0646\u064a \u0639\u0644\u064a\u0647:",
-                "",
-                "```csharp",
-                "public static bool TryNormalizeName(string? value, out string normalized)",
-                "{",
-                "    normalized = string.Empty;",
-                "",
-                "    if (string.IsNullOrWhiteSpace(value))",
-                "    {",
-                "        return false;",
-                "    }",
-                "",
-                "    normalized = value.Trim();",
-                "    return true;",
-                "}",
-                "```",
-                "",
-                "\u0627\u0628\u0639\u062a\u0644\u064a \u0627\u0633\u0645 \u0627\u0644\u0645\u064a\u062b\u0648\u062f\u060c \u0627\u0644\u0645\u062f\u062e\u0644\u0627\u062a\u060c \u0627\u0644\u0646\u0627\u062a\u062c \u0627\u0644\u0645\u062a\u0648\u0642\u0639\u060c \u0648\u0642\u0648\u0627\u0639\u062f \u0627\u0644\u0640 validation\u060c \u0648\u0623\u0646\u0627 \u0623\u0637\u0644\u0639\u0647\u0627 \u062c\u0627\u0647\u0632\u0629 \u0639\u0644\u0649 \u0627\u0644\u0645\u0637\u0644\u0648\u0628.")
-            : """
-              Sure. I need the method's purpose before I can write the exact version. Here is a clean C# template you can build from:
-
-              ```csharp
-              public static bool TryNormalizeName(string? value, out string normalized)
-              {
-                  normalized = string.Empty;
-
-                  if (string.IsNullOrWhiteSpace(value))
-                  {
-                      return false;
-                  }
-
-                  normalized = value.Trim();
-                  return true;
-              }
-              ```
-
-              Send me the method name, inputs, expected return value, and validation rules, and I will write the final method.
-              """;
-
-    private static string BuildGenericCodeReply(bool arabic) =>
-        arabic
-            ? """
-              أكيد. بس الطلب ناقص أهم جزء: الميثود تعمل إيه بالضبط؟ لحد ما تحدد المطلوب، ده قالب C# نظيف تقدر تبني عليه:
-
-              ```csharp
-              public static bool TryNormalizeName(string? value, out string normalized)
-              {
-                  normalized = string.Empty;
-
-                  if (string.IsNullOrWhiteSpace(value))
-                  {
-                      return false;
-                  }
-
-                  normalized = value.Trim();
-                  return true;
-              }
-              ```
-
-              ابعتلي اسم الميثود، المدخلات، الناتج المتوقع، وقواعد الـ validation، وأنا أطلعها جاهزة على المطلوب.
-              """
-            : """
-              Sure. I need the method's purpose before I can write the exact version. Here is a clean C# template you can build from:
-
-              ```csharp
-              public static bool TryNormalizeName(string? value, out string normalized)
-              {
-                  normalized = string.Empty;
-
-                  if (string.IsNullOrWhiteSpace(value))
-                  {
-                      return false;
-                  }
-
-                  normalized = value.Trim();
-                  return true;
-              }
-              ```
-
-              Send me the method name, inputs, expected return value, and validation rules, and I will write the final method.
-              """;
 
     private static void AppendBackendFindings(StringBuilder builder, string observations)
     {
@@ -975,17 +864,6 @@ public sealed class SelfContainedReasoningModel : IChatModel
         Regex.IsMatch(value, $@"(?<![\p{{L}}\p{{N}}_]){Regex.Escape(word)}(?![\p{{L}}\p{{N}}_])", RegexOptions.IgnoreCase);
 
     private static bool HasArabic(string text) => text.Any(c => c >= 0x0600 && c <= 0x06FF);
-
-    private static bool IsGreeting(string lower, string text)
-    {
-        var normalized = lower.Trim().Trim('.', '!', '?');
-        return normalized is "hi" or "hello" or "hey" or "yo" or "sup" ||
-               ContainsAny(text, "\u0627\u0647\u0644\u0627", "\u0623\u0647\u0644\u0627", "\u0645\u0631\u062d\u0628\u0627", "\u0633\u0644\u0627\u0645", "\u0627\u0632\u064a\u0643", "\u0639\u0627\u0645\u0644 \u0627\u064a\u0647");
-    }
-
-    private static bool WantsCapabilities(string lower, string text) =>
-        ContainsAny(lower, "what can you do", "help me", "capabilities", "who are you") ||
-        ContainsAny(text, "\u062a\u0642\u062f\u0631 \u062a\u0639\u0645\u0644 \u0627\u064a\u0647", "\u0627\u0646\u062a \u0645\u064a\u0646", "\u0633\u0627\u0639\u062f\u0646\u064a");
 
     private static string SingleLine(string value, int maxLength)
     {

@@ -111,6 +111,59 @@ public sealed class WebToolsTests
         Assert.Contains("planner with tools", result.Content);
     }
 
+    [Fact]
+    public async Task WebResearchTool_FallsBackWhenSearchProviderReturnsGatePage()
+    {
+        using var client = new HttpClient(new StaticHttpHandler(request =>
+        {
+            if (request.RequestUri?.Host.Contains("duckduckgo.com", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return Html("""
+                    <html>
+                      <head><title>DuckDuckGo - Protection. Privacy. Peace of mind.</title></head>
+                      <body><a href="https://duckduckgo.com/">here</a></body>
+                    </html>
+                    """);
+            }
+
+            if (request.RequestUri?.Host.Contains("bing.com", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return Html("""
+                    <html><body>
+                      <a href="https://example.com/langgraph">LangGraph Result</a>
+                    </body></html>
+                    """);
+            }
+
+            return Html("""
+                <html>
+                  <head><title>LangGraph Source</title></head>
+                  <body>
+                    <article>
+                      <p>LangGraph is a framework for building stateful agent workflows with graph-based control.</p>
+                      <p>It supports durable execution, tool use, and iterative agent behavior.</p>
+                    </article>
+                  </body>
+                </html>
+                """);
+        }));
+        var tool = new WebResearchTool(client);
+
+        var result = await tool.InvokeAsync(
+            new ToolInvocation("web.research", new Dictionary<string, string?>
+            {
+                ["query"] = "LangGraph",
+                ["maxResults"] = "3",
+                ["maxPages"] = "1"
+            }),
+            CreateContext());
+
+        Assert.True(result.Succeeded, result.Content);
+        Assert.Contains("LangGraph Result", result.Content);
+        Assert.Contains("URL: https://example.com/langgraph", result.Content);
+        Assert.DoesNotContain("https://duckduckgo.com/", result.Content);
+    }
+
     private static ToolContext CreateContext()
     {
         var workspace = Path.Combine(Path.GetTempPath(), "thoth-tests", Guid.NewGuid().ToString("N"));
