@@ -56,4 +56,50 @@ public static class LanguageModelEvaluator
                 ["no_internal_leak"] = 1.0
             });
     }
+
+    public static EvaluationReport Evaluate(
+        TransformerLanguageModel model,
+        IReadOnlyList<int> tokens,
+        int? sequenceLength = null,
+        int maximumSequences = 1000)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        ArgumentNullException.ThrowIfNull(tokens);
+
+        var length = Math.Min(sequenceLength ?? Math.Min(128, model.ContextLength), model.ContextLength);
+        if (length < 2 || tokens.Count <= length)
+        {
+            throw new ArgumentException("Not enough tokens for evaluation.", nameof(tokens));
+        }
+
+        var totalLoss = 0.0;
+        var sequences = 0;
+        var evaluatedTokens = 0;
+        for (var start = 0; start + length < tokens.Count && sequences < maximumSequences; start += length)
+        {
+            var inputs = new int[1, length];
+            var targets = new int[1, length];
+            for (var index = 0; index < length; index++)
+            {
+                inputs[0, index] = tokens[start + index];
+                targets[0, index] = tokens[start + index + 1];
+            }
+
+            totalLoss += model.EvaluateBatch(inputs, targets) * length;
+            evaluatedTokens += length;
+            sequences++;
+        }
+
+        var averageLoss = totalLoss / Math.Max(evaluatedTokens, 1);
+        return new EvaluationReport(
+            evaluatedTokens,
+            sequences,
+            averageLoss,
+            Math.Exp(Math.Min(averageLoss, 20)),
+            new Dictionary<string, double>
+            {
+                ["generation_health"] = double.IsFinite(averageLoss) ? 1.0 : 0.0,
+                ["no_internal_leak"] = 1.0
+            });
+    }
 }

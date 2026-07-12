@@ -8,6 +8,10 @@ public sealed record TrainingOptions
 
     public int SequenceLength { get; init; } = 128;
 
+    public int BatchSize { get; init; } = 1;
+
+    public int GradientAccumulationSteps { get; init; } = 1;
+
     public double LearningRate { get; init; } = 0.001;
 
     public double MinimumLearningRate { get; init; } = 0.00005;
@@ -37,6 +41,16 @@ public sealed record TrainingOptions
         if (SequenceLength < 2 || SequenceLength > modelSequenceLength)
         {
             throw new ArgumentOutOfRangeException(nameof(SequenceLength));
+        }
+
+        if (BatchSize < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(BatchSize));
+        }
+
+        if (GradientAccumulationSteps < 1)
+        {
+            throw new ArgumentOutOfRangeException(nameof(GradientAccumulationSteps));
         }
 
         if (LearningRate <= 0 || MinimumLearningRate <= 0 || MinimumLearningRate > LearningRate)

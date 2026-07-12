@@ -8,6 +8,8 @@ public sealed record GenerationOptions
 
     public int TopK { get; init; } = 40;
 
+    public double TopP { get; init; } = 1.0;
+
     public int? Seed { get; init; }
 
     public void Validate()
@@ -25,6 +27,11 @@ public sealed record GenerationOptions
         if (TopK < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(TopK));
+        }
+
+        if (TopP <= 0 || TopP > 1 || double.IsNaN(TopP))
+        {
+            throw new ArgumentOutOfRangeException(nameof(TopP));
         }
     }
 }

@@ -45,6 +45,7 @@ public static class CliApp
                 "generate" => await RunGenerateAsync(host.Services, rest, cancellationToken),
                 "evaluate" => await RunEvaluateAsync(host.Services, rest, cancellationToken),
                 "model-status" => await RunModelStatusAsync(host.Services, rest, cancellationToken),
+                "tokenizer" => await RunTokenizerAsync(host.Services, rest, cancellationToken),
                 "tools" => RunTools(host.Services, rest),
                 "memory" => await RunMemoryAsync(host.Services, rest, cancellationToken),
                 "config" => RunConfig(host.Services, rest),
@@ -133,6 +134,41 @@ public static class CliApp
         return 0;
     }
 
+    private static async Task<int> RunTokenizerAsync(
+        IServiceProvider services,
+        string[] args,
+        CancellationToken cancellationToken)
+    {
+        if (args.Length == 0 || IsHelp(args[0]))
+        {
+            Console.WriteLine("Usage: thoth tokenizer train --data path --output data/tokenizers/thoth-bpe [--vocab-size 8000]");
+            return 0;
+        }
+
+        var command = args[0].ToLowerInvariant();
+        if (command != "train")
+        {
+            Console.Error.WriteLine("Unknown tokenizer command. Try: thoth tokenizer train --data path --output path");
+            return 2;
+        }
+
+        var parsed = ParsedArguments.Parse(args.Skip(1).ToArray());
+        var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
+        var dataPath = parsed.GetValue("--data") ??
+                       (!string.IsNullOrWhiteSpace(parsed.RemainingText)
+                           ? parsed.RemainingText
+                           : Path.Combine(appOptions.DataDirectory, "training"));
+        var output = parsed.GetValue("--output") ?? Path.Combine(appOptions.DataDirectory, "tokenizers", "thoth-bpe");
+        var vocabularySize = parsed.GetInt("--vocab-size", 8_000);
+
+        var tokenizer = await BpeTokenizer.TrainFromFilesAsync(dataPath, vocabularySize, cancellationToken);
+        await tokenizer.SaveAsync(output, cancellationToken);
+        Console.WriteLine($"Tokenizer: {Path.GetFullPath(output)}");
+        Console.WriteLine($"Vocabulary: {tokenizer.VocabularySize:n0}");
+        Console.WriteLine($"Merges: {tokenizer.Merges.Count:n0}");
+        return 0;
+    }
+
     private static async Task<int> RunTrainAsync(
         IServiceProvider services,
         string[] args,
@@ -140,6 +176,11 @@ public static class CliApp
     {
         var parsed = ParsedArguments.Parse(args);
         var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
+        if (IsTransformer(parsed))
+        {
+            return await RunTransformerTrainAsync(appOptions, parsed, cancellationToken);
+        }
+
         var tokenizer = services.GetRequiredService<ITextTokenizer>();
         var dataPath = parsed.GetValue("--data") ??
                        (!string.IsNullOrWhiteSpace(parsed.RemainingText)
@@ -211,6 +252,93 @@ public static class CliApp
         return 0;
     }
 
+    private static async Task<int> RunTransformerTrainAsync(
+        ThothOptions appOptions,
+        ParsedArguments parsed,
+        CancellationToken cancellationToken)
+    {
+        var (tokenizer, tokenizerName) = await ResolveTokenizerAsync(appOptions, parsed, cancellationToken);
+        var dataPath = parsed.GetValue("--data") ??
+                       (!string.IsNullOrWhiteSpace(parsed.RemainingText)
+                           ? parsed.RemainingText
+                           : Path.Combine(appOptions.DataDirectory, "training"));
+        var checkpointPath = Path.GetFullPath(parsed.GetValue("--checkpoint") ??
+                                              Path.Combine(appOptions.DataDirectory, "models", "thoth-transformer.bin"));
+
+        TransformerLanguageModel model;
+        if (File.Exists(checkpointPath) && !parsed.HasFlag("--fresh"))
+        {
+            model = await TransformerCheckpoint.LoadAsync(checkpointPath, cancellationToken);
+            Console.WriteLine($"Resuming Transformer checkpoint at step {model.OptimizerStep:n0}: {checkpointPath}");
+        }
+        else
+        {
+            var preset = parsed.GetValue("--preset") ?? "tiny";
+            var config = preset.Equals("bootstrap", StringComparison.OrdinalIgnoreCase)
+                ? TransformerConfig.Bootstrap(tokenizer.VocabularySize, parsed.GetInt("--seed", appOptions.Model.Seed))
+                : TransformerConfig.Tiny(tokenizer.VocabularySize, parsed.GetInt("--seed", appOptions.Model.Seed));
+
+            config = config with
+            {
+                ContextLength = parsed.GetInt("--context", config.ContextLength),
+                LayerCount = parsed.GetInt("--layers", config.LayerCount),
+                Width = parsed.GetInt("--width", config.Width),
+                HeadCount = parsed.GetInt("--heads", config.HeadCount),
+                FeedForwardSize = parsed.GetInt("--ffn", config.FeedForwardSize),
+                Dropout = parsed.GetDouble("--dropout", config.Dropout)
+            };
+            model = new TransformerLanguageModel(config);
+            Console.WriteLine($"Created random Transformer with {model.ParameterCount:n0} parameters.");
+        }
+
+        var corpus = await CorpusLoader.LoadCorpusAsync(dataPath, tokenizer, cancellationToken: cancellationToken);
+        Console.WriteLine($"Loaded {corpus.Tokens.Length:n0} corpus tokens from {corpus.Manifest.FileCount:n0} files.");
+
+        var options = new TrainingOptions
+        {
+            Epochs = parsed.GetInt("--epochs", 3),
+            StepsPerEpoch = parsed.TryGetInt("--steps-per-epoch"),
+            SequenceLength = parsed.GetInt("--sequence", Math.Min(128, model.ContextLength)),
+            BatchSize = parsed.GetInt("--batch-size", 1),
+            LearningRate = parsed.GetDouble("--lr", 0.001),
+            MinimumLearningRate = parsed.GetDouble("--min-lr", 0.00005),
+            WarmupSteps = parsed.GetInt("--warmup", 100),
+            WeightDecay = parsed.GetDouble("--weight-decay", 0.01),
+            GradientClip = parsed.GetDouble("--gradient-clip", 1.0),
+            CheckpointEverySteps = parsed.GetInt("--checkpoint-every", 500),
+            Seed = parsed.GetInt("--seed", appOptions.Model.Seed)
+        };
+
+        var progress = new Progress<TrainingProgress>(value =>
+        {
+            if (value.StepInEpoch == 1 || value.StepInEpoch % 10 == 0 || value.StepInEpoch == value.StepsPerEpoch)
+            {
+                Console.WriteLine(
+                    $"transformer epoch {value.Epoch}/{value.Epochs} step {value.StepInEpoch}/{value.StepsPerEpoch} " +
+                    $"global {value.GlobalStep:n0} loss {value.Loss:F4} ema {value.SmoothedLoss:F4} lr {value.LearningRate:E2}");
+            }
+        });
+
+        var report = await new TransformerLanguageModelTrainer(model)
+            .TrainAsync(corpus.Tokens, options, checkpointPath, tokenizerName, progress, cancellationToken);
+        var manifestPath = checkpointPath + ".dataset-manifest.json";
+        await CorpusLoader.WriteManifestAsync(manifestPath, corpus.Manifest, cancellationToken);
+        await ModelCheckpointQualityGate.SaveMetadataAsync(
+            checkpointPath,
+            ModelCheckpointMetadata.CreateUnqualified(model, manifestPath, tokenizer: tokenizerName),
+            cancellationToken);
+
+        Console.WriteLine();
+        Console.WriteLine($"Transformer checkpoint: {report.CheckpointPath}");
+        Console.WriteLine($"Tokenizer: {tokenizerName}");
+        Console.WriteLine($"Dataset manifest: {manifestPath}");
+        Console.WriteLine($"Steps: {report.StartingStep:n0} -> {report.CompletedStep:n0}");
+        Console.WriteLine($"Loss: {report.InitialLoss:F4} -> {report.FinalLoss:F4}");
+        Console.WriteLine($"Tokens seen: {report.TokensSeen:n0}");
+        Console.WriteLine($"Elapsed: {report.Elapsed}");
+        return 0;
+    }
+
     private static async Task<int> RunGenerateAsync(
         IServiceProvider services,
         string[] args,
@@ -225,7 +353,6 @@ public static class CliApp
         }
 
         var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
-        var tokenizer = services.GetRequiredService<ITextTokenizer>();
         var checkpoint = Path.GetFullPath(parsed.GetValue("--checkpoint") ?? appOptions.Model.CheckpointPath);
         var inspection = await ModelCheckpointQualityGate.InspectAsync(checkpoint, ToThresholds(appOptions), cancellationToken);
         if (!inspection.CanUse(ModelRole.Generation) && !parsed.HasFlag("--experimental"))
@@ -240,6 +367,25 @@ public static class CliApp
             return 1;
         }
 
+        if (IsTransformer(parsed))
+        {
+            var (transformerTokenizer, _) = await ResolveTokenizerAsync(appOptions, parsed, cancellationToken);
+            var transformer = await TransformerCheckpoint.LoadAsync(checkpoint, cancellationToken);
+            var generated = new TransformerTextGenerator(transformer, transformerTokenizer).Generate(
+                prompt,
+                new GenerationOptions
+                {
+                    MaxNewTokens = parsed.GetInt("--tokens", appOptions.Model.MaxNewTokens),
+                    Temperature = parsed.GetDouble("--temperature", appOptions.Model.Temperature),
+                    TopK = parsed.GetInt("--top-k", appOptions.Model.TopK),
+                    TopP = parsed.GetDouble("--top-p", 1.0),
+                    Seed = parsed.TryGetInt("--seed")
+                });
+            Console.WriteLine(generated);
+            return 0;
+        }
+
+        var tokenizer = services.GetRequiredService<ITextTokenizer>();
         var model = await ModelCheckpoint.LoadAsync(checkpoint, cancellationToken);
         var text = new NeuralTextGenerator(model, tokenizer).Generate(
             prompt,
@@ -248,6 +394,7 @@ public static class CliApp
                 MaxNewTokens = parsed.GetInt("--tokens", appOptions.Model.MaxNewTokens),
                 Temperature = parsed.GetDouble("--temperature", appOptions.Model.Temperature),
                 TopK = parsed.GetInt("--top-k", appOptions.Model.TopK),
+                TopP = parsed.GetDouble("--top-p", 1.0),
                 Seed = parsed.TryGetInt("--seed")
             });
         Console.WriteLine(text);
@@ -261,19 +408,47 @@ public static class CliApp
     {
         var parsed = ParsedArguments.Parse(args);
         var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
-        var tokenizer = services.GetRequiredService<ITextTokenizer>();
+        var (tokenizer, tokenizerName) = IsTransformer(parsed)
+            ? await ResolveTokenizerAsync(appOptions, parsed, cancellationToken)
+            : (services.GetRequiredService<ITextTokenizer>(), ModelCheckpointMetadata.ByteTokenizer);
         var dataPath = parsed.GetValue("--data") ??
                        (!string.IsNullOrWhiteSpace(parsed.RemainingText)
                            ? parsed.RemainingText
                            : Path.Combine(appOptions.DataDirectory, "training", "validation"));
         var checkpoint = Path.GetFullPath(parsed.GetValue("--checkpoint") ?? appOptions.Model.CheckpointPath);
-        var model = await ModelCheckpoint.LoadAsync(checkpoint, cancellationToken);
         var corpus = await CorpusLoader.LoadCorpusAsync(dataPath, tokenizer, cancellationToken: cancellationToken);
-        var report = LanguageModelEvaluator.Evaluate(
-            model,
-            corpus.Tokens,
-            parsed.TryGetInt("--sequence"),
-            parsed.GetInt("--max-sequences", 1000));
+        EvaluationReport report;
+        ModelCheckpointMetadata metadata;
+        if (IsTransformer(parsed))
+        {
+            var transformer = await TransformerCheckpoint.LoadAsync(checkpoint, cancellationToken);
+            report = LanguageModelEvaluator.Evaluate(
+                transformer,
+                corpus.Tokens,
+                parsed.TryGetInt("--sequence"),
+                parsed.GetInt("--max-sequences", 1000));
+            var current = await ModelCheckpointQualityGate.LoadMetadataAsync(checkpoint, cancellationToken);
+            metadata = ModelCheckpointMetadata.CreateUnqualified(
+                transformer,
+                current?.DatasetManifestPath,
+                metrics: ToMetrics(report),
+                tokenizer: tokenizerName);
+        }
+        else
+        {
+            var model = await ModelCheckpoint.LoadAsync(checkpoint, cancellationToken);
+            report = LanguageModelEvaluator.Evaluate(
+                model,
+                corpus.Tokens,
+                parsed.TryGetInt("--sequence"),
+                parsed.GetInt("--max-sequences", 1000));
+            var current = await ModelCheckpointQualityGate.LoadMetadataAsync(checkpoint, cancellationToken);
+            metadata = ModelCheckpointMetadata.CreateUnqualified(
+                model,
+                current?.DatasetManifestPath,
+                metrics: ToMetrics(report));
+        }
+
         var reportPath = Path.GetFullPath(parsed.GetValue("--report") ?? checkpoint + ".evaluation.json");
         Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
         await File.WriteAllTextAsync(
@@ -281,20 +456,10 @@ public static class CliApp
             JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }),
             cancellationToken);
 
-        var metrics = new CheckpointEvaluationMetrics(
-            report.EvaluatedTokens,
-            report.EvaluatedSequences,
-            report.AverageLoss,
-            report.Perplexity,
-            report.Scores ?? new Dictionary<string, double>());
-        var currentMetadata = await ModelCheckpointQualityGate.LoadMetadataAsync(checkpoint, cancellationToken);
+        metadata = metadata with { EvaluationReportPath = reportPath };
         await ModelCheckpointQualityGate.SaveMetadataAsync(
             checkpoint,
-            ModelCheckpointMetadata.CreateUnqualified(
-                model,
-                currentMetadata?.DatasetManifestPath,
-                reportPath,
-                metrics),
+            metadata,
             cancellationToken);
 
         Console.WriteLine($"Evaluated tokens: {report.EvaluatedTokens:n0}");
@@ -476,10 +641,15 @@ public static class CliApp
           thoth chat
 
         Neural model:
+          thoth tokenizer train --data data/training/pretrain --output data/tokenizers/thoth-bpe [--vocab-size 8000]
           thoth train --data path [--checkpoint path] [--epochs n] [--steps-per-epoch n]
                       [--sequence n] [--embedding n] [--hidden n] [--lr value] [--fresh]
-          thoth generate "prompt" [--checkpoint path] [--tokens n] [--temperature value] [--top-k n] [--experimental]
-          thoth evaluate [--data path] [--checkpoint path] [--sequence n] [--report path]
+          thoth train --architecture transformer --tokenizer data/tokenizers/thoth-bpe --data data/training/pretrain
+                      [--checkpoint data/models/thoth-transformer.bin] [--preset tiny|bootstrap]
+                      [--layers n] [--width n] [--heads n] [--ffn n] [--batch-size n]
+          thoth generate "prompt" [--architecture transformer] [--tokenizer path] [--checkpoint path]
+                         [--tokens n] [--temperature value] [--top-k n] [--top-p value] [--experimental]
+          thoth evaluate [--architecture transformer] [--tokenizer path] [--data path] [--checkpoint path] [--sequence n] [--report path]
           thoth model-status [--checkpoint path]
 
         Utilities:
@@ -505,6 +675,47 @@ public static class CliApp
             options.Model.Quality.MinimumGenerationHealthScore,
             options.Model.Quality.MinimumUnderstandingScore,
             options.Model.Quality.MinimumAgentDecisionScore);
+
+    private static bool IsTransformer(ParsedArguments parsed) =>
+        (parsed.GetValue("--architecture") ?? parsed.GetValue("--arch") ?? string.Empty)
+        .Equals("transformer", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task<(ITextTokenizer Tokenizer, string TokenizerName)> ResolveTokenizerAsync(
+        ThothOptions appOptions,
+        ParsedArguments parsed,
+        CancellationToken cancellationToken)
+    {
+        var tokenizerPath = parsed.GetValue("--tokenizer");
+        if (string.Equals(tokenizerPath, "byte", StringComparison.OrdinalIgnoreCase))
+        {
+            return (new ByteTokenizer(), ModelCheckpointMetadata.ByteTokenizer);
+        }
+
+        tokenizerPath ??= Path.Combine(appOptions.DataDirectory, "tokenizers", "thoth-bpe");
+        var resolvedArtifact = Path.HasExtension(tokenizerPath)
+            ? Path.GetFullPath(tokenizerPath)
+            : Path.Combine(Path.GetFullPath(tokenizerPath), "tokenizer.json");
+
+        if (File.Exists(resolvedArtifact))
+        {
+            return (await BpeTokenizer.LoadAsync(tokenizerPath, cancellationToken), ModelCheckpointMetadata.BpeTokenizer);
+        }
+
+        if (parsed.GetValue("--tokenizer") is not null)
+        {
+            throw new FileNotFoundException($"Tokenizer artifact was not found: {resolvedArtifact}", resolvedArtifact);
+        }
+
+        return (new ByteTokenizer(), ModelCheckpointMetadata.ByteTokenizer);
+    }
+
+    private static CheckpointEvaluationMetrics ToMetrics(EvaluationReport report) =>
+        new(
+            report.EvaluatedTokens,
+            report.EvaluatedSequences,
+            report.AverageLoss,
+            report.Perplexity,
+            report.Scores ?? new Dictionary<string, double>());
 
     private sealed record ParsedArguments(
         IReadOnlyDictionary<string, string?> Options,

@@ -52,8 +52,12 @@ public sealed record ModelCheckpointMetadata(
     CheckpointEvaluationMetrics? Metrics)
 {
     public const int CurrentMetadataVersion = 1;
-    public const string CurrentArchitecture = "legacy-recurrent-rnn-v1";
-    public const string CurrentTokenizer = "byte-v1";
+    public const string LegacyRecurrentArchitecture = "legacy-recurrent-rnn-v1";
+    public const string TransformerArchitecture = "decoder-only-transformer-v1";
+    public const string ByteTokenizer = "byte-v1";
+    public const string BpeTokenizer = "bpe-v1";
+    public const string CurrentArchitecture = LegacyRecurrentArchitecture;
+    public const string CurrentTokenizer = ByteTokenizer;
 
     public static ModelCheckpointMetadata CreateUnqualified(
         RecurrentLanguageModel model,
@@ -64,8 +68,27 @@ public sealed record ModelCheckpointMetadata(
             CurrentMetadataVersion,
             ModelCheckpoint.CurrentFormat,
             ModelCheckpoint.CurrentFormatVersion,
-            CurrentArchitecture,
-            CurrentTokenizer,
+            LegacyRecurrentArchitecture,
+            ByteTokenizer,
+            ModelCheckpointQualityGate.HashConfig(model.Config),
+            model.OptimizerStep,
+            DateTimeOffset.UtcNow,
+            datasetManifestPath,
+            evaluationReportPath,
+            metrics);
+
+    public static ModelCheckpointMetadata CreateUnqualified(
+        TransformerLanguageModel model,
+        string? datasetManifestPath = null,
+        string? evaluationReportPath = null,
+        CheckpointEvaluationMetrics? metrics = null,
+        string tokenizer = BpeTokenizer) =>
+        new(
+            CurrentMetadataVersion,
+            TransformerCheckpoint.CurrentFormat,
+            TransformerCheckpoint.CurrentFormatVersion,
+            TransformerArchitecture,
+            tokenizer,
             ModelCheckpointQualityGate.HashConfig(model.Config),
             model.OptimizerStep,
             DateTimeOffset.UtcNow,
@@ -125,10 +148,10 @@ public static class ModelCheckpointQualityGate
                 ["checkpoint file is missing"]);
         }
 
-        RecurrentLanguageModel model;
+        CheckpointIdentity identity;
         try
         {
-            model = await ModelCheckpoint.LoadAsync(fullPath, cancellationToken);
+            identity = await LoadIdentityAsync(fullPath, cancellationToken);
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or EndOfStreamException or UnauthorizedAccessException)
         {
@@ -151,7 +174,7 @@ public static class ModelCheckpointQualityGate
                 ["checkpoint metadata is missing"]);
         }
 
-        ValidateMetadata(metadata, model, thresholds, reasons);
+        ValidateMetadata(metadata, identity, thresholds, reasons);
         var status = reasons.Count == 0
             ? DetermineQualifiedStatus(metadata, thresholds, reasons)
             : ModelCheckpointStatus.Unqualified;
@@ -211,9 +234,62 @@ public static class ModelCheckpointQualityGate
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
     }
 
+    public static string HashConfig(TransformerConfig config)
+    {
+        var value = string.Join(
+            ':',
+            config.VocabularySize,
+            config.ContextLength,
+            config.LayerCount,
+            config.Width,
+            config.HeadCount,
+            config.FeedForwardSize,
+            config.Dropout.ToString("R", System.Globalization.CultureInfo.InvariantCulture),
+            config.Seed,
+            config.TieOutputEmbeddings);
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value))).ToLowerInvariant();
+    }
+
+    private static async Task<CheckpointIdentity> LoadIdentityAsync(
+        string checkpointPath,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var recurrent = await ModelCheckpoint.LoadAsync(checkpointPath, cancellationToken);
+            return new CheckpointIdentity(
+                ModelCheckpoint.CurrentFormat,
+                ModelCheckpoint.CurrentFormatVersion,
+                ModelCheckpointMetadata.LegacyRecurrentArchitecture,
+                ModelCheckpointMetadata.ByteTokenizer,
+                HashConfig(recurrent.Config),
+                recurrent.OptimizerStep);
+        }
+        catch (InvalidDataException recurrentException)
+        {
+            try
+            {
+                var transformer = await TransformerCheckpoint.LoadAsync(checkpointPath, cancellationToken);
+                return new CheckpointIdentity(
+                    TransformerCheckpoint.CurrentFormat,
+                    TransformerCheckpoint.CurrentFormatVersion,
+                    ModelCheckpointMetadata.TransformerArchitecture,
+                    null,
+                    HashConfig(transformer.Config),
+                    transformer.OptimizerStep);
+            }
+            catch (InvalidDataException transformerException)
+            {
+                throw new InvalidDataException(
+                    $"Unsupported checkpoint format. Legacy loader: {recurrentException.Message}; Transformer loader: {transformerException.Message}",
+                    transformerException);
+            }
+        }
+    }
+
     private static void ValidateMetadata(
         ModelCheckpointMetadata metadata,
-        RecurrentLanguageModel model,
+        CheckpointIdentity identity,
         CheckpointQualityThresholds thresholds,
         List<string> reasons)
     {
@@ -222,23 +298,29 @@ public static class ModelCheckpointQualityGate
             reasons.Add($"metadata version {metadata.MetadataVersion} is not supported");
         }
 
-        if (metadata.CheckpointFormat != ModelCheckpoint.CurrentFormat ||
-            metadata.CheckpointFormatVersion != ModelCheckpoint.CurrentFormatVersion)
+        if (metadata.CheckpointFormat != identity.CheckpointFormat ||
+            metadata.CheckpointFormatVersion != identity.CheckpointFormatVersion)
         {
             reasons.Add("checkpoint format metadata is incompatible");
         }
 
-        if (metadata.Architecture != ModelCheckpointMetadata.CurrentArchitecture)
+        if (metadata.Architecture != identity.Architecture)
         {
             reasons.Add($"architecture {metadata.Architecture} is not qualified");
         }
 
-        if (metadata.Tokenizer != ModelCheckpointMetadata.CurrentTokenizer)
+        if (identity.RequiredTokenizer is not null && metadata.Tokenizer != identity.RequiredTokenizer)
         {
             reasons.Add($"tokenizer {metadata.Tokenizer} is not compatible");
         }
 
-        if (metadata.ModelConfigHash != HashConfig(model.Config))
+        if (metadata.Architecture == ModelCheckpointMetadata.TransformerArchitecture &&
+            metadata.Tokenizer is not ModelCheckpointMetadata.ByteTokenizer and not ModelCheckpointMetadata.BpeTokenizer)
+        {
+            reasons.Add($"tokenizer {metadata.Tokenizer} is not compatible");
+        }
+
+        if (metadata.ModelConfigHash != identity.ModelConfigHash)
         {
             reasons.Add("model config hash does not match checkpoint weights");
         }
@@ -314,4 +396,12 @@ public static class ModelCheckpointQualityGate
 
     private static double Score(CheckpointEvaluationMetrics metrics, string name) =>
         metrics.Scores.TryGetValue(name, out var value) && double.IsFinite(value) ? value : 0.0;
+
+    private sealed record CheckpointIdentity(
+        string CheckpointFormat,
+        int CheckpointFormatVersion,
+        string Architecture,
+        string? RequiredTokenizer,
+        string ModelConfigHash,
+        long OptimizerStep);
 }
