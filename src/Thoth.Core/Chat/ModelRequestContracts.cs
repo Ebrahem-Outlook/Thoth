@@ -21,12 +21,14 @@ public sealed record DirectReplyModelInput(
     string Text,
     bool HasImage = false,
     string? PreferredLanguage = null,
-    IReadOnlyList<ChatAttachment>? Attachments = null) : ModelRequestInput;
+    IReadOnlyList<ChatAttachment>? Attachments = null,
+    string? ActiveTaskSummary = null) : ModelRequestInput;
 
 public sealed record UnderstandingModelInput(
     string Text,
     IReadOnlyList<string> AttachmentContentTypes,
-    string? Project = null) : ModelRequestInput;
+    string? Project = null,
+    string? ActiveTaskSummary = null) : ModelRequestInput;
 
 public sealed record AgentPlanModelInput(
     AgentRequest Request,

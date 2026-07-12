@@ -12,6 +12,7 @@ public enum ProgrammingLanguage
     Java,
     Go,
     Rust,
+    Cpp,
     Sql,
     Html,
     Css,
@@ -30,6 +31,7 @@ public static class ProgrammingLanguageDetector
     [
         (ProgrammingLanguage.TypeScript, "TypeScript", ["typescript", "type script", ".ts", "\u062a\u0627\u064a\u0628 \u0633\u0643\u0631\u0628\u062a", "\u062a\u0627\u064a\u0628\u0633\u0643\u0631\u064a\u0628\u062a"]),
         (ProgrammingLanguage.JavaScript, "JavaScript", ["javascript", "java script", ".js", "\u062c\u0627\u0641\u0627\u0633\u0643\u0631\u0628\u062a"]),
+        (ProgrammingLanguage.Cpp, "C++", ["c++", "cpp", "c plus plus", ".cpp", ".cc", ".cxx", "\u0633\u064a \u0628\u0644\u0633 \u0628\u0644\u0633"]),
         (ProgrammingLanguage.CSharp, "C#", ["c#", "csharp", "c sharp", ".net", "dotnet", "\u0633\u064a \u0634\u0627\u0631\u0628"]),
         (ProgrammingLanguage.Python, "Python", ["python", ".py", "\u0628\u0627\u064a\u062b\u0648\u0646"]),
         (ProgrammingLanguage.Java, "Java", ["java", ".java", "\u062c\u0627\u0641\u0627"]),
@@ -73,6 +75,12 @@ public static class ProgrammingLanguageDetector
     private static bool ContainsAlias(string text, string alias)
     {
         if (alias.StartsWith(".", StringComparison.Ordinal))
+        {
+            return text.Contains(alias, StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (alias.Contains('+', StringComparison.Ordinal) ||
+            alias.Contains('#', StringComparison.Ordinal))
         {
             return text.Contains(alias, StringComparison.OrdinalIgnoreCase);
         }

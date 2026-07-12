@@ -1,5 +1,8 @@
 using System.Text;
 using System.Text.Json;
+using Thoth.Cognition.Concepts;
+using Thoth.Cognition.Procedures;
+using Thoth.Cognition.Tasks;
 using Thoth.Core.Agent;
 using Thoth.Core.Chat;
 using Thoth.Core.Understanding;
@@ -10,13 +13,25 @@ public sealed class ChatOrchestrator(
     IConversationStore conversations,
     IUserUnderstandingService understanding,
     AgentEngine agentEngine,
-    IChatModel chatModel)
+    IChatModel chatModel,
+    IConversationTaskStore? conversationTasks = null,
+    CodeTaskExtractor? codeTasks = null,
+    TaskContinuationResolver? continuationResolver = null,
+    TaskMerger? taskMerger = null,
+    ProcedureRegistry? procedures = null)
 {
+    private readonly IConversationTaskStore conversationTasks = conversationTasks ?? new InMemoryConversationTaskStore();
+    private readonly CodeTaskExtractor codeTasks = codeTasks ?? new CodeTaskExtractor();
+    private readonly TaskContinuationResolver continuationResolver = continuationResolver ?? new TaskContinuationResolver();
+    private readonly TaskMerger taskMerger = taskMerger ?? new TaskMerger();
+    private readonly ProcedureRegistry procedures = procedures ?? new ProcedureRegistry();
+
     public async Task<ChatTurnResult> SendAsync(
         ChatTurnRequest request,
         CancellationToken cancellationToken = default)
     {
         await conversations.EnsureCreatedAsync(cancellationToken);
+        await conversationTasks.EnsureCreatedAsync(cancellationToken);
 
         var conversation = request.ConversationId is Guid existingId
             ? (await conversations.GetAsync(existingId, cancellationToken))?.Conversation
@@ -28,11 +43,16 @@ public sealed class ChatOrchestrator(
             ? []
             : await conversations.GetAttachmentsAsync(request.AttachmentIds, cancellationToken);
 
+        var activeTask = await conversationTasks.GetActiveAsync(conversation.Id, cancellationToken);
+        var codeTask = BuildCodeTask(conversation.Id, request.Content, activeTask);
+        var activeTaskSummary = SummarizeTask(codeTask ?? activeTask);
+
         var understood = await understanding.UnderstandAsync(
             new UnderstandingRequest(
                 request.Content,
                 attachments.Select(attachment => attachment.ContentType).ToArray(),
-                conversation.Project),
+                conversation.Project,
+                activeTaskSummary),
             cancellationToken);
 
         var userMessage = await conversations.AddMessageAsync(
@@ -47,7 +67,11 @@ public sealed class ChatOrchestrator(
         AgentRun? agentRun = null;
         string assistantText;
 
-        if (request.UseTools && understood.RequiresTools)
+        if (codeTask is not null)
+        {
+            assistantText = await HandleCodeTaskAsync(codeTask, userMessage, request.Content, cancellationToken);
+        }
+        else if (request.UseTools && understood.RequiresTools)
         {
             var goal = BuildAgentGoal(request.Content, attachments);
             agentRun = await agentEngine.RunAsync(
@@ -70,7 +94,8 @@ public sealed class ChatOrchestrator(
                 understood.Intent,
                 understood.Topic,
                 understood.RequiresTools,
-                agentRunId = agentRun?.RunId
+                agentRunId = agentRun?.RunId,
+                activeTask = activeTaskSummary
             }),
             cancellationToken: cancellationToken);
 
@@ -78,6 +103,53 @@ public sealed class ChatOrchestrator(
                      ?? new ConversationDetail(conversation, [userMessage, assistantMessage]);
 
         return new ChatTurnResult(detail, userMessage, assistantMessage, understood, agentRun);
+    }
+
+    private CodeGenerationTask? BuildCodeTask(
+        Guid conversationId,
+        string content,
+        CodeGenerationTask? activeTask)
+    {
+        if (codeTasks.IsRepositoryBound(content))
+        {
+            return null;
+        }
+
+        if (activeTask is not null && continuationResolver.IsContinuation(activeTask, content))
+        {
+            return taskMerger.Merge(activeTask, content);
+        }
+
+        return codeTasks.ExtractNewTask(conversationId, content);
+    }
+
+    private async Task<string> HandleCodeTaskAsync(
+        CodeGenerationTask task,
+        ConversationMessage userMessage,
+        string requestContent,
+        CancellationToken cancellationToken)
+    {
+        var withTurn = taskMerger.AddTurn(task, userMessage.Id, requestContent);
+        await conversationTasks.SaveAsync(withTurn, "task.updated", userMessage.Id, cancellationToken);
+
+        if (!withTurn.IsReady)
+        {
+            return TaskResponseComposer.CreateClarification(withTurn, requestContent);
+        }
+
+        if (!procedures.TryExecute(withTurn, out var generated))
+        {
+            return "I understood the coding task, but I do not have a verified local procedure for that exact behavior yet.";
+        }
+
+        var completed = withTurn with
+        {
+            Status = Thoth.Cognition.Tasks.TaskStatus.Completed,
+            UpdatedAt = DateTimeOffset.UtcNow,
+            Version = withTurn.Version + 1
+        };
+        await conversationTasks.SaveAsync(completed, "task.completed", userMessage.Id, cancellationToken);
+        return generated.Content;
     }
 
     private async Task<string> ReplyDirectlyAsync(
@@ -122,10 +194,22 @@ public sealed class ChatOrchestrator(
                     request.Content,
                     attachments.Any(attachment => attachment.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)),
                     understood.Language,
-                    attachments.Select(ToChatAttachment).ToArray())),
+                    attachments.Select(ToChatAttachment).ToArray(),
+                    SummarizeTask(await conversationTasks.GetActiveAsync(conversationId, cancellationToken)))),
             cancellationToken);
 
         return response.Content.Trim();
+    }
+
+    private static string? SummarizeTask(CodeGenerationTask? task)
+    {
+        if (task is null)
+        {
+            return null;
+        }
+
+        var missing = task.MissingSlots.Count == 0 ? "none" : string.Join(", ", task.MissingSlots);
+        return $"code_generation status={task.Status}; language={task.Language.DisplayName()}; artifact={task.ArtifactKind}; behavior={task.Behavior ?? "unknown"}; missing={missing}";
     }
 
     private static string BuildAgentGoal(

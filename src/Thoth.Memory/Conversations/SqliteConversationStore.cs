@@ -380,7 +380,7 @@ public sealed class SqliteConversationStore(string databasePath) : IConversation
 
     private SqliteConnection CreateConnection()
     {
-        var connection = new SqliteConnection($"Data Source={databasePath}");
+        var connection = new SqliteConnection($"Data Source={databasePath};Foreign Keys=True;Pooling=False");
         return connection;
     }
 

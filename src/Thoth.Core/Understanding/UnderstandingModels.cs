@@ -3,7 +3,8 @@ namespace Thoth.Core.Understanding;
 public sealed record UnderstandingRequest(
     string Text,
     IReadOnlyList<string> AttachmentContentTypes,
-    string? Project = null);
+    string? Project = null,
+    string? ActiveTaskSummary = null);
 
 public sealed record UnderstandingResult(
     string Intent,

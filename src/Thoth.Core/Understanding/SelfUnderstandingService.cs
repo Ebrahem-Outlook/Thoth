@@ -25,7 +25,8 @@ public sealed class SelfUnderstandingService(
                     Input: new UnderstandingModelInput(
                         request.Text,
                         request.AttachmentContentTypes,
-                        request.Project)),
+                        request.Project,
+                        request.ActiveTaskSummary)),
                 cancellationToken);
 
             var parsed = TryParse(response.Content);

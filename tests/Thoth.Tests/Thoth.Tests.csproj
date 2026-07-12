@@ -32,6 +32,7 @@
     <ProjectReference Include="..\..\src\Thoth.Training\Thoth.Training.csproj" />
     <ProjectReference Include="..\..\src\Thoth.Inference\Thoth.Inference.csproj" />
     <ProjectReference Include="..\..\src\Thoth.Evaluation\Thoth.Evaluation.csproj" />
+    <ProjectReference Include="..\..\src\Thoth.Cognition\Thoth.Cognition.csproj" />
   </ItemGroup>
 
 </Project>

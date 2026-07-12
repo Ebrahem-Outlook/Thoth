@@ -5,6 +5,7 @@ using Thoth.Core.Memory;
 using Thoth.Core.Sandbox;
 using Thoth.Core.Tools;
 using Thoth.Core.Understanding;
+using Thoth.Llm.Models;
 
 namespace Thoth.Tests.Core;
 
@@ -74,7 +75,35 @@ public sealed class ChatOrchestratorTests
         Assert.Equal("image/png", captured.ContentType);
     }
 
-    private static ChatOrchestrator CreateOrchestrator(FakeConversationStore store, CapturingChatModel model)
+    [Fact]
+    public async Task SendAsync_ContinuesIncompleteCodeTaskAndReturnsCalculatorMethod()
+    {
+        var store = new FakeConversationStore();
+        var model = new SelfContainedReasoningModel();
+        var orchestrator = CreateOrchestrator(store, model);
+
+        var first = await orchestrator.SendAsync(new ChatTurnRequest(
+            null,
+            "can you build C# method",
+            [],
+            Directory.GetCurrentDirectory(),
+            "thoth-self",
+            UseTools: false));
+
+        var second = await orchestrator.SendAsync(new ChatTurnRequest(
+            first.Conversation.Conversation.Id,
+            "work as calculator",
+            [],
+            Directory.GetCurrentDirectory(),
+            "thoth-self",
+            UseTools: false));
+
+        Assert.Contains("```csharp", second.AssistantMessage.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("DivideByZeroException", second.AssistantMessage.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("what should", second.AssistantMessage.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static ChatOrchestrator CreateOrchestrator(FakeConversationStore store, IChatModel model)
     {
         var engine = new AgentEngine(
             model,

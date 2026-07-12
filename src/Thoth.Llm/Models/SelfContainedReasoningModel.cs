@@ -39,6 +39,9 @@ public sealed class SelfContainedReasoningModel : IChatModel
         "type script",
         "javascript",
         "java script",
+        "c++",
+        "cpp",
+        "c plus plus",
         "ts",
         "js",
         "\u0643\u0648\u062f",
@@ -46,7 +49,8 @@ public sealed class SelfContainedReasoningModel : IChatModel
         "\u0645\u064a\u062b\u062f",
         "\u062f\u0627\u0644\u0629",
         "\u0643\u0644\u0627\u0633",
-        "\u0633\u064a \u0634\u0627\u0631\u0628"
+        "\u0633\u064a \u0634\u0627\u0631\u0628",
+        "\u0633\u064a \u0628\u0644\u0633 \u0628\u0644\u0633"
     ];
 
     private static readonly string[] BackendTerms =

@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Thoth.Core\Thoth.Core.csproj" />
+    <ProjectReference Include="..\Thoth.Cognition\Thoth.Cognition.csproj" />
   </ItemGroup>
 
   <ItemGroup>

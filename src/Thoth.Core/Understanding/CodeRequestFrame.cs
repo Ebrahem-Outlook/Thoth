@@ -62,7 +62,7 @@ public static class CodeRequestAnalyzer
     {
         var lower = text.ToLowerInvariant();
         return ProgrammingLanguageDetector.Detect(text) is not null ||
-               ContainsAny(lower, "code", "method", "meethod", "function", "class", "snippet") ||
+        ContainsAny(lower, "code", "method", "meethod", "function", "class", "snippet", "cpp", "c++", "c plus plus") ||
                ContainsAny(text, "\u0643\u0648\u062f", "\u0645\u064a\u062b\u0648\u062f", "\u0645\u064a\u062b\u062f", "\u062f\u0627\u0644\u0629", "\u0643\u0644\u0627\u0633");
     }
 
