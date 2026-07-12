@@ -67,6 +67,30 @@ This is an engineering policy, not legal advice.
 
 `Thoth.Data` includes a local scanner for likely API keys, private keys, passwords, connection strings, high-entropy secrets, email addresses, phone numbers, and IP addresses. Findings are redacted; secret values must not be logged into manifests.
 
+## Acquisition Planning
+
+List source plans:
+
+```powershell
+dotnet run --project src/Thoth.Cli -- data list-sources
+```
+
+Inspect one source without downloading it:
+
+```powershell
+dotnet run --project src/Thoth.Cli -- data plan-source --source arwiki
+```
+
+The current catalog covers `arwiki`, `simplewiki`, `mdn-content`, `oasst1`, `curated-code`, and `owned-synthetic`. External sources are plan-only until the approval gate prints source URL, license, remote size, expected disk use, and current free disk space.
+
+Generate a small owned local instruction set:
+
+```powershell
+dotnet run --project src/Thoth.Cli -- data generate-owned --count 100
+```
+
+Generated owned examples are deterministic and include verifier metadata. The default output path is under ignored `data/splits`.
+
 ## Instruction JSONL
 
 Each line:

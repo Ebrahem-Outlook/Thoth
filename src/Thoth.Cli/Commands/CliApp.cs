@@ -9,7 +9,9 @@ using Thoth.Core.Agent;
 using Thoth.Core.Configuration;
 using Thoth.Core.Memory;
 using Thoth.Core.Tools;
+using Thoth.Data.Acquisition;
 using Thoth.Data.Manifests;
+using Thoth.Data.Synthetic;
 using Thoth.Evaluation;
 using Thoth.Inference;
 using Thoth.Model;
@@ -604,24 +606,86 @@ public static class CliApp
     {
         if (args.Length == 0 || IsHelp(args[0]))
         {
-            Console.WriteLine("Usage: thoth data init-manifests [--output data/manifests]");
+            Console.WriteLine("Usage: thoth data init-manifests|list-sources|plan-source|generate-owned");
             return 0;
         }
 
         var command = args[0].ToLowerInvariant();
-        if (command != "init-manifests")
-        {
-            Console.Error.WriteLine("Unknown data command. Try: thoth data init-manifests");
-            return 2;
-        }
-
         var parsed = ParsedArguments.Parse(args.Skip(1).ToArray());
         var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
-        var output = parsed.GetValue("--output") ?? Path.Combine(appOptions.DataDirectory, "manifests");
 
-        await DataManifestWriter.EnsureSkeletonAsync(output, cancellationToken);
-        Console.WriteLine($"Data manifests: {Path.GetFullPath(output)}");
-        return 0;
+        if (command == "init-manifests")
+        {
+            var output = parsed.GetValue("--output") ?? Path.Combine(appOptions.DataDirectory, "manifests");
+
+            await DataManifestWriter.EnsureSkeletonAsync(output, cancellationToken);
+            Console.WriteLine($"Data manifests: {Path.GetFullPath(output)}");
+            return 0;
+        }
+
+        if (command == "list-sources")
+        {
+            foreach (var source in AcquisitionPlanCatalog.Sources)
+            {
+                Console.WriteLine($"{source.SourceId}: {source.DisplayName} ({source.LicenseSpdx})");
+            }
+
+            return 0;
+        }
+
+        if (command == "plan-source")
+        {
+            var sourceId = parsed.GetValue("--source") ?? parsed.RemainingText;
+            if (string.IsNullOrWhiteSpace(sourceId))
+            {
+                Console.Error.WriteLine("Missing source. Example: thoth data plan-source --source arwiki");
+                return 2;
+            }
+
+            var source = AcquisitionPlanCatalog.Resolve(sourceId);
+            if (parsed.HasFlag("--json"))
+            {
+                Console.WriteLine(JsonSerializer.Serialize(
+                    source,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+                return 0;
+            }
+
+            Console.WriteLine($"{source.DisplayName}");
+            Console.WriteLine($"Source: {source.OfficialUrl}");
+            Console.WriteLine($"License: {source.LicenseSpdx}");
+            Console.WriteLine($"Attribution required: {source.AttributionRequired}");
+            Console.WriteLine("Required approval facts:");
+            foreach (var fact in source.RequiredApprovalFacts)
+            {
+                Console.WriteLine($"  - {fact}");
+            }
+
+            Console.WriteLine("Steps:");
+            foreach (var step in source.Steps.OrderBy(step => step.Order))
+            {
+                Console.WriteLine($"  {step.Order}. {step.Name}: {step.Description}");
+            }
+
+            return 0;
+        }
+
+        if (command == "generate-owned")
+        {
+            var output = parsed.GetValue("--output") ??
+                         Path.Combine(appOptions.DataDirectory, "splits", "instruction", "train", "owned-synthetic.jsonl");
+            var count = parsed.GetInt("--count", 100);
+            var seed = parsed.GetInt("--seed", 1337);
+
+            await new OwnedSyntheticInstructionGenerator().WriteJsonlAsync(output, count, seed, cancellationToken);
+            Console.WriteLine($"Owned examples: {Path.GetFullPath(output)}");
+            Console.WriteLine($"Count: {count:n0}");
+            Console.WriteLine($"Seed: {seed}");
+            return 0;
+        }
+
+        Console.Error.WriteLine("Unknown data command. Try: thoth data init-manifests");
+        return 2;
     }
 
     private static async Task<int> RunMemoryAsync(
@@ -775,6 +839,9 @@ public static class CliApp
 
         Utilities:
           thoth data init-manifests [--output data/manifests]
+          thoth data list-sources
+          thoth data plan-source --source arwiki|simplewiki|mdn-content|oasst1|curated-code|owned-synthetic [--json]
+          thoth data generate-owned [--output data/splits/instruction/train/owned-synthetic.jsonl] [--count n] [--seed n]
           thoth tools list
           thoth memory add "note" [--scope project]
           thoth memory search "query" [--scope project] [--limit n]
