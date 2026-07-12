@@ -10,7 +10,8 @@ public sealed record TorchTransformerConfig(
     double Dropout = 0,
     int Seed = 1337,
     int PaddingToken = -100,
-    string Device = "cpu")
+    string Device = "cpu",
+    bool TieOutputEmbeddings = false)
 {
     public static TorchTransformerConfig Tiny(int vocabularySize, int seed = 1337) =>
         new(vocabularySize, 128, 2, 128, 4, 384, 0, seed);

@@ -24,7 +24,9 @@ public sealed class TorchTransformerLanguageModel : IDisposable
 
         TokenEmbedding = CreateParameter("token_embedding", [config.VocabularySize, config.Width], 0.02);
         FinalNormWeight = CreateParameter("final_norm", [config.Width], 1.0, randomNormal: false);
-        LmHead = CreateParameter("lm_head", [config.VocabularySize, config.Width], 0.02);
+        LmHead = config.TieOutputEmbeddings
+            ? TokenEmbedding
+            : CreateParameter("lm_head", [config.VocabularySize, config.Width], 0.02);
         layers = Enumerable.Range(0, config.LayerCount)
             .Select(index => new TorchTransformerLayer(index, config, CreateParameter))
             .ToArray();
@@ -39,6 +41,8 @@ public sealed class TorchTransformerLanguageModel : IDisposable
     public Tensor FinalNormWeight { get; private set; }
 
     public Tensor LmHead { get; private set; }
+
+    public long ParameterCount => parameters.Sum(parameter => parameter.Value.numel());
 
     public IReadOnlyDictionary<string, Tensor> NamedParameters() =>
         parameters.ToDictionary(parameter => parameter.Name, parameter => parameter.Value, StringComparer.Ordinal);
@@ -125,10 +129,51 @@ public sealed class TorchTransformerLanguageModel : IDisposable
     public Tensor TensorFrom(long[,] values) =>
         torch.tensor(values, dtype: ScalarType.Int64, device: device);
 
+    public float[] NextTokenLogits(IReadOnlyList<int> tokens)
+    {
+        ArgumentNullException.ThrowIfNull(tokens);
+        if (tokens.Count == 0)
+        {
+            throw new ArgumentException("At least one token is required.", nameof(tokens));
+        }
+
+        var context = tokens.TakeLast(Config.ContextLength).ToArray();
+        var values = new long[1, context.Length];
+        for (var index = 0; index < context.Length; index++)
+        {
+            values[0, index] = context[index];
+        }
+
+        using var noGrad = torch.no_grad();
+        using var input = TensorFrom(values);
+        using var logits = Forward(input, training: false);
+        using var last = logits[0, context.Length - 1].detach().cpu().reshape([-1]);
+        return last.data<float>().ToArray();
+    }
+
     public Tensor CloneParameter(string name)
     {
         var parameter = parameters.First(parameter => parameter.Name == name);
         return parameter.Value.detach().clone();
+    }
+
+    public TorchTransformerState ExportState() =>
+        new(
+            Config,
+            OptimizerStep,
+            parameters.Select(parameter => new TorchParameterSnapshot(
+                parameter.Name,
+                parameter.Value.shape.ToArray(),
+                ToArray(parameter.Value),
+                ToArray(parameter.FirstMoment),
+                ToArray(parameter.SecondMoment))).ToArray());
+
+    public static TorchTransformerLanguageModel FromState(TorchTransformerState state)
+    {
+        ArgumentNullException.ThrowIfNull(state);
+        var model = new TorchTransformerLanguageModel(state.Config);
+        model.LoadState(state);
+        return model;
     }
 
     public static double MaxAbsDifference(Tensor left, Tensor right) =>
@@ -233,12 +278,49 @@ public sealed class TorchTransformerLanguageModel : IDisposable
     {
         TokenEmbedding = FindParameter("token_embedding");
         FinalNormWeight = FindParameter("final_norm");
-        LmHead = FindParameter("lm_head");
+        LmHead = Config.TieOutputEmbeddings ? TokenEmbedding : FindParameter("lm_head");
         foreach (var layer in layers)
         {
             layer.Rebind(parameters);
         }
     }
+
+    private void LoadState(TorchTransformerState state)
+    {
+        if (state.Parameters.Count != parameters.Count)
+        {
+            throw new InvalidDataException("Torch Transformer checkpoint parameter count does not match the model.");
+        }
+
+        foreach (var snapshot in state.Parameters)
+        {
+            var parameter = parameters.FirstOrDefault(parameter => parameter.Name == snapshot.Name)
+                            ?? throw new InvalidDataException($"Torch Transformer checkpoint parameter is missing: {snapshot.Name}");
+            if (!parameter.Value.shape.SequenceEqual(snapshot.Shape))
+            {
+                throw new InvalidDataException($"Torch Transformer checkpoint shape mismatch for {snapshot.Name}.");
+            }
+
+            parameter.Value.Dispose();
+            parameter.FirstMoment.Dispose();
+            parameter.SecondMoment.Dispose();
+            parameter.Value = TensorFrom(snapshot.Value, snapshot.Shape, requiresGrad: true);
+            parameter.FirstMoment = TensorFrom(snapshot.FirstMoment, snapshot.Shape, requiresGrad: false);
+            parameter.SecondMoment = TensorFrom(snapshot.SecondMoment, snapshot.Shape, requiresGrad: false);
+        }
+
+        OptimizerStep = Math.Max(0, state.OptimizerStep);
+        RebindParameterFields();
+    }
+
+    private Tensor TensorFrom(float[] values, long[] shape, bool requiresGrad)
+    {
+        var tensor = torch.tensor(values, dtype: ScalarType.Float32, device: device).reshape(shape).detach();
+        return requiresGrad ? tensor.requires_grad_(true) : tensor;
+    }
+
+    private static float[] ToArray(Tensor tensor) =>
+        tensor.detach().cpu().reshape([-1]).data<float>().ToArray();
 
     private Tensor FindParameter(string name) =>
         parameters.First(parameter => parameter.Name == name).Value;

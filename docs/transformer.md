@@ -15,11 +15,13 @@ The TorchSharp path currently includes:
 - RoPE;
 - SwiGLU feed-forward layers;
 - final RMSNorm;
-- LM head;
+- LM head, with optional tied output embeddings;
 - cross-entropy with padding ignored;
 - dropout path when configured;
 - manual AdamW update over TorchSharp gradients;
-- CPU correctness tests for finite gradients, parameter updates, shape, causal isolation, padding masking, determinism, and loss reduction.
+- CPU profiles for smoke and laptop-pilot sizing;
+- Torch parameter and Adam-moment checkpoint round-trip;
+- CPU correctness tests for finite gradients, parameter updates, shape, causal isolation, padding masking, determinism, loss reduction, profile parameter counts, next-token logits, tied embeddings, and checkpoint round-trip.
 
 The pinned dependency is `TorchSharp-cpu` `0.107.0`.
 
@@ -27,8 +29,7 @@ The pinned dependency is `TorchSharp-cpu` `0.107.0`.
 
 This is not a production-qualified Transformer runtime yet. Remaining Phase 6 work includes:
 
-- checkpoint round-trip for Torch tensors;
-- resume state for optimizer/scheduler/RNG;
+- full training resume command integration with scheduler/RNG state;
 - KV-cache generation and cache-equivalence tests;
 - top-k/top-p/repetition-penalty generation;
 - mixed precision and CUDA configuration;

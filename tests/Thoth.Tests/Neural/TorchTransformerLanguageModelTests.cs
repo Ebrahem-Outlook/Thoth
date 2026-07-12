@@ -1,5 +1,6 @@
 using TorchSharp;
 using Thoth.Model;
+using Thoth.Model.Persistence;
 
 namespace Thoth.Tests.Neural;
 
@@ -101,6 +102,71 @@ public sealed class TorchTransformerLanguageModelTests
 
         var after = model.Loss(inputs, targets).ToDouble();
         Assert.True(after < before, $"Expected loss to drop below {before}, got {after}.");
+    }
+
+    [Fact]
+    public void Profiles_ReportExactSmokeParameterCount()
+    {
+        var profile = TorchTransformerProfiles.SmokeCpu(vocabularySize: 32);
+        using var model = new TorchTransformerLanguageModel(profile.Config);
+
+        Assert.Equal(profile.ParameterCount, model.ParameterCount);
+        Assert.Equal("smoke-cpu", profile.Name);
+        Assert.True(profile.Config.TieOutputEmbeddings);
+    }
+
+    [Fact]
+    public void TiedEmbeddings_RemoveSeparateLmHeadParameter()
+    {
+        using var model = new TorchTransformerLanguageModel(new TorchTransformerConfig(
+            VocabularySize: 16,
+            ContextLength: 16,
+            LayerCount: 1,
+            Width: 32,
+            HeadCount: 4,
+            FeedForwardSize: 64,
+            Dropout: 0,
+            Seed: 42,
+            TieOutputEmbeddings: true));
+
+        Assert.DoesNotContain("lm_head", model.NamedParameters().Keys);
+        Assert.True(model.ParameterCount < CreateModel().ParameterCount);
+    }
+
+    [Fact]
+    public void NextTokenLogits_ReturnsVocabularyVector()
+    {
+        using var model = CreateModel(vocabularySize: 21);
+
+        var logits = model.NextTokenLogits([1, 2, 3]);
+
+        Assert.Equal(21, logits.Length);
+        Assert.All(logits, value => Assert.True(float.IsFinite(value)));
+    }
+
+    [Fact]
+    public async Task Checkpoint_RoundTripPreservesLogitsAndOptimizerStep()
+    {
+        using var model = CreateModel();
+        model.TrainBatch(
+            new long[,] { { 1, 2, 3, 4 } },
+            new long[,] { { 2, 3, 4, 5 } },
+            learningRate: 0.01,
+            weightDecay: 0,
+            gradientClip: 1);
+        var before = model.NextTokenLogits([1, 2, 3, 4]);
+        var path = Path.Combine(Path.GetTempPath(), "thoth-tests", Guid.NewGuid().ToString("N"), "torch-transformer.bin");
+
+        await TorchTransformerCheckpoint.SaveAsync(path, model);
+        using var loaded = await TorchTransformerCheckpoint.LoadAsync(path);
+        var after = loaded.NextTokenLogits([1, 2, 3, 4]);
+
+        Assert.Equal(model.OptimizerStep, loaded.OptimizerStep);
+        Assert.Equal(before.Length, after.Length);
+        for (var index = 0; index < before.Length; index++)
+        {
+            Assert.Equal(before[index], after[index], precision: 6);
+        }
     }
 
     private static TorchTransformerLanguageModel CreateModel(int vocabularySize = 16) =>
