@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -49,6 +50,7 @@ public static class CliApp
                 "generate" => await RunGenerateAsync(host.Services, rest, cancellationToken),
                 "evaluate" => await RunEvaluateAsync(host.Services, rest, cancellationToken),
                 "model-status" => await RunModelStatusAsync(host.Services, rest, cancellationToken),
+                "model" => await RunModelAsync(host.Services, rest, cancellationToken),
                 "tokenizer" => await RunTokenizerAsync(host.Services, rest, cancellationToken),
                 "hardware" => RunHardware(host.Services, rest),
                 "data" => await RunDataAsync(host.Services, rest, cancellationToken),
@@ -360,7 +362,7 @@ public static class CliApp
         CancellationToken cancellationToken)
     {
         var parsed = ParsedArguments.Parse(args);
-        var prompt = parsed.RemainingText;
+        var prompt = parsed.GetValue("--prompt") ?? parsed.RemainingText;
         if (string.IsNullOrWhiteSpace(prompt))
         {
             Console.Error.WriteLine("Missing prompt. Example: thoth generate \"User: hello\\nAssistant:\"");
@@ -498,6 +500,123 @@ public static class CliApp
         options.Converters.Add(new JsonStringEnumConverter());
         Console.WriteLine(JsonSerializer.Serialize(inspection, options));
         return inspection.Status is ModelCheckpointStatus.LoadingFailed ? 1 : 0;
+    }
+
+    private static async Task<int> RunModelAsync(
+        IServiceProvider services,
+        string[] args,
+        CancellationToken cancellationToken)
+    {
+        if (args.Length == 0 || IsHelp(args[0]))
+        {
+            Console.WriteLine("""
+            Usage:
+              thoth model train [existing thoth train options]
+              thoth model generate --prompt "text" [existing thoth generate options]
+              thoth model evaluate [existing thoth evaluate options]
+              thoth model status|qualify [--checkpoint path]
+              thoth model benchmark [--profile smoke-cpu|laptop-pilot] [--steps n] [--sequence n] [--json]
+            """);
+            return 0;
+        }
+
+        var subcommand = args[0].ToLowerInvariant();
+        var rest = args.Skip(1).ToArray();
+        return subcommand switch
+        {
+            "train" => await RunTrainAsync(services, rest, cancellationToken),
+            "generate" => await RunGenerateAsync(services, rest, cancellationToken),
+            "evaluate" => await RunEvaluateAsync(services, rest, cancellationToken),
+            "status" or "inspect" or "qualify" => await RunModelStatusAsync(services, rest, cancellationToken),
+            "benchmark" => RunModelBenchmark(rest),
+            _ => UnknownModelCommand(subcommand)
+        };
+    }
+
+    private static int RunModelBenchmark(string[] args)
+    {
+        var parsed = ParsedArguments.Parse(args);
+        var profileName = parsed.GetValue("--profile") ?? "smoke-cpu";
+        var seed = parsed.GetInt("--seed", 1337);
+        var vocabularySize = parsed.GetInt(
+            "--vocab-size",
+            profileName.Equals("laptop-pilot", StringComparison.OrdinalIgnoreCase) ? 8_000 : 2_048);
+        TorchTransformerProfile profile;
+        try
+        {
+            profile = ResolveTorchProfile(profileName, vocabularySize, seed);
+        }
+        catch (ArgumentOutOfRangeException exception)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return 2;
+        }
+        var sequence = Math.Min(parsed.GetInt("--sequence", Math.Min(64, profile.Config.ContextLength)), profile.Config.ContextLength);
+        var steps = parsed.GetInt("--steps", 5);
+        if (steps < 1 || sequence < 2)
+        {
+            Console.Error.WriteLine("Benchmark requires --steps >= 1 and --sequence >= 2.");
+            return 2;
+        }
+
+        using var model = new TorchTransformerLanguageModel(profile.Config);
+        var random = new Random(seed);
+        var context = Enumerable.Range(0, sequence)
+            .Select(_ => random.Next(0, Math.Max(2, profile.Config.VocabularySize)))
+            .ToArray();
+
+        _ = model.NextTokenLogits(context);
+        var stopwatch = Stopwatch.StartNew();
+        for (var step = 0; step < steps; step++)
+        {
+            _ = model.NextTokenLogits(context);
+        }
+
+        stopwatch.Stop();
+        var tokens = (long)steps * sequence;
+        var tokensPerSecond = tokens / Math.Max(stopwatch.Elapsed.TotalSeconds, 0.000001);
+        var result = new
+        {
+            profile = profile.Name,
+            parameters = profile.ParameterCount,
+            device = profile.Config.Device,
+            steps,
+            sequence,
+            tokens,
+            elapsedMs = stopwatch.Elapsed.TotalMilliseconds,
+            tokensPerSecond
+        };
+
+        if (parsed.HasFlag("--json"))
+        {
+            Console.WriteLine(JsonSerializer.Serialize(result, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+        }
+        else
+        {
+            Console.WriteLine($"Profile: {result.profile}");
+            Console.WriteLine($"Parameters: {result.parameters:n0}");
+            Console.WriteLine($"Device: {result.device}");
+            Console.WriteLine($"Tokens: {result.tokens:n0}");
+            Console.WriteLine($"Elapsed: {result.elapsedMs:F1} ms");
+            Console.WriteLine($"Throughput: {result.tokensPerSecond:F1} tokens/sec");
+        }
+
+        return 0;
+    }
+
+    private static TorchTransformerProfile ResolveTorchProfile(string profileName, int vocabularySize, int seed) =>
+        profileName.ToLowerInvariant() switch
+        {
+            "smoke" or "smoke-cpu" => TorchTransformerProfiles.SmokeCpu(vocabularySize, seed),
+            "pilot" or "laptop-pilot" => TorchTransformerProfiles.LaptopPilot(vocabularySize, seed),
+            _ => throw new ArgumentOutOfRangeException(nameof(profileName), $"Unknown model benchmark profile: {profileName}")
+        };
+
+    private static int UnknownModelCommand(string command)
+    {
+        Console.Error.WriteLine($"Unknown model command: {command}");
+        Console.Error.WriteLine("Try: thoth model train|generate|evaluate|status|qualify|benchmark");
+        return 2;
     }
 
     private static int RunTools(IServiceProvider services, string[] args)
@@ -836,6 +955,8 @@ public static class CliApp
                          [--tokens n] [--temperature value] [--top-k n] [--top-p value] [--experimental]
           thoth evaluate [--architecture transformer] [--tokenizer path] [--data path] [--checkpoint path] [--sequence n] [--report path]
           thoth model-status [--checkpoint path]
+          thoth model train|generate|evaluate|status|qualify|benchmark
+          thoth model benchmark [--profile smoke-cpu|laptop-pilot] [--steps n] [--sequence n] [--json]
 
         Utilities:
           thoth data init-manifests [--output data/manifests]
