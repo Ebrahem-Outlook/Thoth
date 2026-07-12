@@ -52,6 +52,13 @@ interface PendingFile {
 
 type SidePanel = 'tools' | 'memory' | 'settings' | 'run' | 'workspace';
 type NormalizedRole = 'user' | 'assistant' | 'system' | 'tool';
+type StatusTone = 'ok' | 'warn' | 'neutral';
+
+interface StatusChip {
+  label: string;
+  value: string;
+  tone: StatusTone;
+}
 
 @Component({
   selector: 'app-root',
@@ -137,6 +144,23 @@ export class App implements OnInit, OnDestroy {
     }
 
     return `${status.runtimeMode} - ${status.toolCount} tools - shell ${status.shellEnabled ? 'on' : 'off'}`;
+  });
+  readonly statusChips = computed<StatusChip[]>(() => {
+    const status = this.systemStatus();
+    if (!status) {
+      return [
+        { label: 'Provider', value: this.config()?.provider || 'connecting', tone: 'neutral' },
+        { label: 'Tools', value: this.useTools() ? 'active' : 'off', tone: this.useTools() ? 'ok' : 'warn' },
+      ];
+    }
+
+    const qualified = this.isCheckpointQualified(status.checkpointState || status.modelStatus);
+    return [
+      { label: 'Provider', value: status.activeProvider || status.runtimeMode, tone: 'neutral' },
+      { label: 'Checkpoint', value: status.checkpointState || status.modelStatus, tone: qualified ? 'ok' : 'warn' },
+      { label: 'Quality', value: status.qualityQualification || 'unknown', tone: qualified ? 'ok' : 'warn' },
+      { label: 'Tools', value: this.useTools() && status.toolsActive ? 'active' : 'off', tone: this.useTools() && status.toolsActive ? 'ok' : 'warn' },
+    ];
   });
 
   ngOnInit(): void {
@@ -547,6 +571,10 @@ export class App implements OnInit, OnDestroy {
     return intent
       .replace(/_/g, ' ')
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
+  }
+
+  isCheckpointQualified(status?: string | null): boolean {
+    return !!status?.startsWith('Qualified');
   }
 
   memoryPreview(content: string): string {

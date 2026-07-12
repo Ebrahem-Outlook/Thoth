@@ -121,6 +121,18 @@
       <div class="conversation-heading">
         <strong>{{ currentTitle() }}</strong>
         <span>{{ statusLine() }}</span>
+        <div class="status-chips">
+          @for (chip of statusChips(); track chip.label) {
+            <span
+              class="status-chip"
+              [class.ok]="chip.tone === 'ok'"
+              [class.warn]="chip.tone === 'warn'"
+            >
+              <small>{{ chip.label }}</small>
+              {{ chip.value }}
+            </span>
+          }
+        </div>
       </div>
       <div class="top-actions">
         @if (selectedConversation()?.conversation; as activeConversation) {
@@ -389,6 +401,20 @@
           <div class="run-status ok">
             <strong>{{ status.runtimeMode }}</strong>
             <span>{{ status.model }} - {{ status.selfContainedOnly ? 'self-contained only' : 'mixed runtime' }}</span>
+          </div>
+          <div class="model-quality" [class.ok]="isCheckpointQualified(status.checkpointState || status.modelStatus)">
+            <strong>{{ status.qualityQualification || status.modelStatus }}</strong>
+            <span>{{ status.checkpointState || status.modelStatus }}</span>
+            @if (status.modelStatusReasons.length) {
+              <details>
+                <summary>Reasons</summary>
+                <ul>
+                  @for (reason of status.modelStatusReasons; track reason) {
+                    <li>{{ reason }}</li>
+                  }
+                </ul>
+              </details>
+            }
           </div>
           <div class="metric-grid">
             <div><strong>{{ status.toolCount }}</strong><span>tools</span></div>

@@ -139,6 +139,10 @@ export interface SystemStatus {
   time: string;
   modelStatus: string;
   modelStatusReasons: string[];
+  activeProvider: string;
+  checkpointState: string;
+  qualityQualification: string;
+  toolsActive: boolean;
 }
 
 export interface MemoryRecord {

@@ -161,4 +161,8 @@ public sealed record SystemStatus(
     int MemoryCount,
     DateTimeOffset Time,
     string ModelStatus,
-    IReadOnlyList<string> ModelStatusReasons);
+    IReadOnlyList<string> ModelStatusReasons,
+    string ActiveProvider,
+    string CheckpointState,
+    string QualityQualification,
+    bool ToolsActive);

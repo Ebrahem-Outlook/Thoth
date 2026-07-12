@@ -285,7 +285,7 @@ button {
 
 .topbar {
   grid-row: 1;
-  height: 58px;
+  min-height: 66px;
   gap: 12px;
   padding: 0 18px;
   border-bottom: 1px solid #e5e7eb;
@@ -297,7 +297,54 @@ button {
   min-width: 0;
   display: grid;
   flex: 1;
-  gap: 1px;
+  gap: 3px;
+}
+
+.conversation-heading > span {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.status-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 210px;
+  height: 20px;
+  border: 1px solid #e5e7eb;
+  border-radius: 999px;
+  padding: 0 8px;
+  color: #374151;
+  background: #fff;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status-chip small {
+  color: #8b949e;
+  font-size: 10px;
+}
+
+.status-chip.ok {
+  border-color: rgba(16, 163, 127, 0.36);
+  background: #f0fdf9;
+  color: #047857;
+}
+
+.status-chip.warn {
+  border-color: rgba(217, 119, 6, 0.3);
+  background: #fffbeb;
+  color: #92400e;
 }
 
 .top-actions {
@@ -725,6 +772,7 @@ button {
 }
 
 .run-status,
+.model-quality,
 .tool-list details,
 .memory-card,
 .settings-grid label,
@@ -745,6 +793,42 @@ button {
 
 .run-status.ok {
   border-color: rgba(16, 163, 127, 0.45);
+}
+
+.model-quality {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 12px;
+  border-color: rgba(217, 119, 6, 0.3);
+  background: #fffbeb;
+}
+
+.model-quality.ok {
+  border-color: rgba(16, 163, 127, 0.45);
+  background: #f0fdf9;
+}
+
+.model-quality span {
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+
+.model-quality details {
+  margin-top: 2px;
+}
+
+.model-quality summary {
+  cursor: pointer;
+  color: #4b5563;
+  font-size: 12px;
+}
+
+.model-quality ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  color: #4b5563;
+  line-height: 1.45;
 }
 
 .run-status span {

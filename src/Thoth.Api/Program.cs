@@ -121,7 +121,11 @@ app.MapGet("/api/system/status", async (
         memoryCount,
         DateTimeOffset.UtcNow,
         modelStatus.Status.ToString(),
-        modelStatus.Reasons));
+        modelStatus.Reasons,
+        options.Value.Model.Provider,
+        modelStatus.Status.ToString(),
+        QualityQualification(modelStatus.Status),
+        tools.List().Count > 0));
 });
 
 app.MapGet("/api/model/status", async (
@@ -392,6 +396,18 @@ static Task<ModelCheckpointInspection> InspectModelAsync(
             options.Model.Quality.MinimumUnderstandingScore,
             options.Model.Quality.MinimumAgentDecisionScore),
         cancellationToken);
+
+static string QualityQualification(ModelCheckpointStatus status) =>
+    status switch
+    {
+        ModelCheckpointStatus.QualifiedForAgentDecisions => "agent decisions",
+        ModelCheckpointStatus.QualifiedForUnderstanding => "understanding",
+        ModelCheckpointStatus.QualifiedForGeneration => "generation",
+        ModelCheckpointStatus.Unqualified => "unqualified",
+        ModelCheckpointStatus.Missing => "missing",
+        ModelCheckpointStatus.LoadingFailed => "loading failed",
+        _ => "unknown"
+    };
 
 static ChatResponseDto ToDto(ChatTurnResult result) =>
     new(
