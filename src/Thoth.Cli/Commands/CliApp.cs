@@ -161,13 +161,22 @@ public static class CliApp
                            ? parsed.RemainingText
                            : Path.Combine(appOptions.DataDirectory, "training"));
         var output = parsed.GetValue("--output") ?? Path.Combine(appOptions.DataDirectory, "tokenizers", "thoth-bpe");
-        var vocabularySize = parsed.GetInt("--vocab-size", 8_000);
+        var profileName = parsed.GetValue("--profile");
+        var profile = profileName is null ? BpeTokenizerProfiles.LaptopPilot : BpeTokenizerProfiles.Resolve(profileName);
+        var vocabularySize = parsed.GetInt("--vocab-size", profile.VocabularySize);
+        var options = new BpeTokenizerTrainingOptions(
+            vocabularySize,
+            parsed.GetInt("--min-frequency", 2),
+            parsed.HasFlag("--normalize-nfc"),
+            profile.Name);
 
-        var tokenizer = await BpeTokenizer.TrainFromFilesAsync(dataPath, vocabularySize, cancellationToken);
+        var tokenizer = await BpeTokenizer.TrainFromFilesAsync(dataPath, options, cancellationToken);
         await tokenizer.SaveAsync(output, cancellationToken);
         Console.WriteLine($"Tokenizer: {Path.GetFullPath(output)}");
+        Console.WriteLine($"Profile: {options.Profile}");
         Console.WriteLine($"Vocabulary: {tokenizer.VocabularySize:n0}");
         Console.WriteLine($"Merges: {tokenizer.Merges.Count:n0}");
+        Console.WriteLine($"Training manifest: {tokenizer.TrainingManifestSha256}");
         return 0;
     }
 
@@ -722,7 +731,9 @@ public static class CliApp
 
         Neural model:
           thoth hardware inspect [--json] [--training-dir path] [--checkpoint-dir path] [--tokenizer-dir path]
-          thoth tokenizer train --data data/training/pretrain --output data/tokenizers/thoth-bpe [--vocab-size 8000]
+          thoth tokenizer train --data data/training/pretrain --output data/tokenizers/thoth-bpe
+                          [--profile smoke|laptop-pilot|laptop-max] [--vocab-size 8000]
+                          [--min-frequency 2] [--normalize-nfc]
           thoth train --data path [--checkpoint path] [--epochs n] [--steps-per-epoch n]
                       [--sequence n] [--embedding n] [--hidden n] [--lr value] [--fresh]
           thoth train --architecture transformer --tokenizer data/tokenizers/thoth-bpe --data data/training/pretrain
