@@ -91,6 +91,15 @@ dotnet run --project src/Thoth.Cli -- data generate-owned --count 100
 
 Generated owned examples are deterministic and include verifier metadata. The default output path is under ignored `data/splits`.
 
+## Normalization and Splits
+
+Phase 4 processing primitives live in `Thoth.Data.Processing`:
+
+- `TextNormalizer` normalizes line endings, removes invalid controls, applies Unicode NFC by default, and preserves indentation inside Markdown code fences.
+- `DocumentQualityAnalyzer` reports transparent features such as valid-character ratio, symbol ratio, repeated-line ratio, entropy, and safety flags.
+- `DocumentDeduplicator` rejects exact, normalized, and near-duplicate documents using local hashes and word-shingle similarity.
+- `StableSplitAssigner` assigns `train`, `validation`, or `test` by stable group key so files from the same repository/page/conversation family stay together.
+
 ## Instruction JSONL
 
 Each line:
