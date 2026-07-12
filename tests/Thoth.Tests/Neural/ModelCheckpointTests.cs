@@ -53,6 +53,9 @@ public sealed class ModelCheckpointTests
         var inspection = await ModelCheckpointQualityGate.InspectAsync(path);
 
         Assert.Equal(ModelCheckpointStatus.Unqualified, inspection.Status);
+        Assert.False(inspection.CanUse(ModelRole.Generation));
+        Assert.False(inspection.CanUse(ModelRole.Understanding));
+        Assert.False(inspection.CanUse(ModelRole.AgentDecision));
         Assert.Contains(inspection.Reasons, reason => reason.Contains("evaluation metrics", StringComparison.OrdinalIgnoreCase));
         Assert.True(File.Exists(ModelCheckpointQualityGate.MetadataPath(path)));
     }

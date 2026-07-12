@@ -16,6 +16,7 @@ using Thoth.Model.Persistence;
 using Thoth.Runtime;
 using Thoth.Tokenization;
 using Thoth.Training;
+using Thoth.Training.Hardware;
 
 namespace Thoth.Cli.Commands;
 
@@ -46,6 +47,7 @@ public static class CliApp
                 "evaluate" => await RunEvaluateAsync(host.Services, rest, cancellationToken),
                 "model-status" => await RunModelStatusAsync(host.Services, rest, cancellationToken),
                 "tokenizer" => await RunTokenizerAsync(host.Services, rest, cancellationToken),
+                "hardware" => RunHardware(host.Services, rest),
                 "tools" => RunTools(host.Services, rest),
                 "memory" => await RunMemoryAsync(host.Services, rest, cancellationToken),
                 "config" => RunConfig(host.Services, rest),
@@ -506,6 +508,84 @@ public static class CliApp
         return 2;
     }
 
+    private static int RunHardware(IServiceProvider services, string[] args)
+    {
+        if (args.Length == 0 || IsHelp(args[0]))
+        {
+            Console.WriteLine("Usage: thoth hardware inspect [--json] [--training-dir path] [--checkpoint-dir path] [--tokenizer-dir path]");
+            return 0;
+        }
+
+        var command = args[0].ToLowerInvariant();
+        if (command != "inspect")
+        {
+            Console.Error.WriteLine("Unknown hardware command. Try: thoth hardware inspect");
+            return 2;
+        }
+
+        var parsed = ParsedArguments.Parse(args.Skip(1).ToArray());
+        var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
+        var directories = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["training"] = parsed.GetValue("--training-dir") ?? Path.Combine(appOptions.DataDirectory, "training"),
+            ["checkpoints"] = parsed.GetValue("--checkpoint-dir") ?? Path.Combine(appOptions.DataDirectory, "models"),
+            ["tokenizers"] = parsed.GetValue("--tokenizer-dir") ?? Path.Combine(appOptions.DataDirectory, "tokenizers")
+        };
+
+        var profile = LocalHardwareProbe.Inspect(directories);
+        if (parsed.HasFlag("--json"))
+        {
+            Console.WriteLine(JsonSerializer.Serialize(
+                profile,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+            return profile.Torch.CpuBackendAvailable &&
+                   profile.WritableDirectories.All(directory => directory.Writable)
+                ? 0
+                : 1;
+        }
+
+        Console.WriteLine("Thoth local hardware profile");
+        Console.WriteLine($"OS: {profile.OperatingSystem} ({profile.Architecture})");
+        Console.WriteLine($"CPU: {profile.CpuName ?? "unknown"}");
+        Console.WriteLine($"Cores: physical {profile.PhysicalCpuCores?.ToString() ?? "unknown"}, logical {profile.LogicalCpuCores}");
+        Console.WriteLine($"Recommended Torch CPU threads: {profile.RecommendedTorchCpuThreads}");
+        Console.WriteLine($"RAM: total {FormatBytes(profile.TotalRamBytes)}, available {FormatBytes(profile.AvailableRamBytes)}");
+        Console.WriteLine($"Torch CPU: {(profile.Torch.CpuBackendAvailable ? "available" : "unavailable")}");
+        Console.WriteLine($"CUDA: {(profile.Torch.CudaAvailable ? "available" : "not available")}");
+        Console.WriteLine($"Device default: {profile.Torch.Device}");
+        Console.WriteLine("Dtypes:");
+        foreach (var dtype in profile.Torch.DtypeChecks)
+        {
+            Console.WriteLine($"  {dtype.Key}: {(dtype.Value ? "ok" : "failed")}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(profile.Torch.Error))
+        {
+            Console.WriteLine($"Torch error: {profile.Torch.Error}");
+        }
+
+        Console.WriteLine("Disk:");
+        foreach (var disk in profile.Disks)
+        {
+            Console.WriteLine($"  {disk.Root}: free {FormatBytes(disk.FreeBytes)} / total {FormatBytes(disk.TotalBytes)}");
+        }
+
+        Console.WriteLine("Writable directories:");
+        foreach (var directory in profile.WritableDirectories)
+        {
+            Console.WriteLine($"  {directory.Purpose}: {(directory.Writable ? "ok" : "failed")} {directory.Path}");
+            if (!string.IsNullOrWhiteSpace(directory.Error))
+            {
+                Console.WriteLine($"    {directory.Error}");
+            }
+        }
+
+        return profile.Torch.CpuBackendAvailable &&
+               profile.WritableDirectories.All(directory => directory.Writable)
+            ? 0
+            : 1;
+    }
+
     private static async Task<int> RunMemoryAsync(
         IServiceProvider services,
         string[] args,
@@ -641,6 +721,7 @@ public static class CliApp
           thoth chat
 
         Neural model:
+          thoth hardware inspect [--json] [--training-dir path] [--checkpoint-dir path] [--tokenizer-dir path]
           thoth tokenizer train --data data/training/pretrain --output data/tokenizers/thoth-bpe [--vocab-size 8000]
           thoth train --data path [--checkpoint path] [--epochs n] [--steps-per-epoch n]
                       [--sequence n] [--embedding n] [--hidden n] [--lr value] [--fresh]
@@ -716,6 +797,25 @@ public static class CliApp
             report.AverageLoss,
             report.Perplexity,
             report.Scores ?? new Dictionary<string, double>());
+
+    private static string FormatBytes(long? bytes)
+    {
+        if (bytes is null)
+        {
+            return "unknown";
+        }
+
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        var value = (double)bytes.Value;
+        var unit = 0;
+        while (value >= 1024 && unit < units.Length - 1)
+        {
+            value /= 1024;
+            unit++;
+        }
+
+        return $"{value:0.##} {units[unit]}";
+    }
 
     private sealed record ParsedArguments(
         IReadOnlyDictionary<string, string?> Options,
