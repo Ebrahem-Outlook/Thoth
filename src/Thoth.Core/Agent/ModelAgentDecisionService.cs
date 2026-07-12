@@ -28,10 +28,16 @@ public sealed class ModelAgentDecisionService(
                         new ChatMessage(ChatRole.User, BuildPrompt(context))
                     ],
                     context.Request.Model,
-                    0),
+                    0,
+                    Purpose: ModelRequestPurpose.AgentDecision,
+                    Input: new AgentDecisionModelInput(
+                        context.Request,
+                        context.Memories,
+                        context.Tools.Select(ModelToolDescriptor.FromTool).ToArray(),
+                        context.Steps.Select(AgentObservation.FromStep).ToArray())),
                 cancellationToken);
 
-            return TryParse(response.Content, context.Tools) ??
+            return TryParse(response.Content, context.Tools, context.Steps) ??
                    await fallback.DecideAsync(context, cancellationToken);
         }
         catch (OperationCanceledException)
@@ -105,7 +111,10 @@ public sealed class ModelAgentDecisionService(
         return builder.ToString();
     }
 
-    private static AgentDecision? TryParse(string content, IReadOnlyList<IAgentTool> tools)
+    private static AgentDecision? TryParse(
+        string content,
+        IReadOnlyList<IAgentTool> tools,
+        IReadOnlyList<AgentStep> previousSteps)
     {
         var start = content.IndexOf('{');
         var end = content.LastIndexOf('}');
@@ -161,7 +170,10 @@ public sealed class ModelAgentDecisionService(
                 }
             }
 
-            return AgentDecision.UseTool(rationale, new ToolInvocation(toolName, arguments));
+            var invocation = new ToolInvocation(toolName, arguments);
+            return IsValidInvocation(invocation, tools, previousSteps)
+                ? AgentDecision.UseTool(rationale, invocation)
+                : null;
         }
         catch (JsonException)
         {
@@ -173,6 +185,55 @@ public sealed class ModelAgentDecisionService(
         element.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString() ?? fallback
             : fallback;
+
+    private static bool IsValidInvocation(
+        ToolInvocation invocation,
+        IReadOnlyList<IAgentTool> tools,
+        IReadOnlyList<AgentStep> previousSteps)
+    {
+        var tool = tools.FirstOrDefault(tool => string.Equals(tool.Name, invocation.ToolName, StringComparison.OrdinalIgnoreCase));
+        if (tool is null)
+        {
+            return false;
+        }
+
+        foreach (var parameter in tool.Parameters.Where(parameter => parameter.Required))
+        {
+            if (!invocation.Arguments.TryGetValue(parameter.Name, out var value) ||
+                string.IsNullOrWhiteSpace(value))
+            {
+                return false;
+            }
+        }
+
+        var repeatedFailures = previousSteps.Count(step =>
+            step.Result?.Succeeded == false &&
+            step.Invocation is not null &&
+            string.Equals(step.Invocation.ToolName, invocation.ToolName, StringComparison.OrdinalIgnoreCase) &&
+            SameArguments(step.Invocation.Arguments, invocation.Arguments));
+        return repeatedFailures < 2;
+    }
+
+    private static bool SameArguments(
+        IReadOnlyDictionary<string, string?> left,
+        IReadOnlyDictionary<string, string?> right)
+    {
+        if (left.Count != right.Count)
+        {
+            return false;
+        }
+
+        foreach (var item in left)
+        {
+            if (!right.TryGetValue(item.Key, out var value) ||
+                !string.Equals(item.Value, value, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     private static string Trim(string value, int maximum) =>
         value.Length <= maximum ? value : value[..maximum] + "\n[truncated]";

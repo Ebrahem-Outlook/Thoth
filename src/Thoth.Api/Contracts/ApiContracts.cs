@@ -21,4 +21,11 @@ public sealed record ChatResponseDto(
     Guid AssistantMessageId,
     string AssistantContent,
     object Understanding,
-    object? AgentRun);
+    object? AgentRun,
+    DeveloperDiagnosticsDto? Diagnostics = null);
+
+public sealed record DeveloperDiagnosticsDto(
+    object Understanding,
+    object? AgentRun,
+    bool ToolsUsed,
+    string? PlanSource);

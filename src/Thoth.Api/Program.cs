@@ -364,7 +364,12 @@ static ChatResponseDto ToDto(ChatTurnResult result) =>
         result.AssistantMessage.Id,
         result.AssistantMessage.Content,
         result.Understanding,
-        result.AgentRun);
+        result.AgentRun,
+        new DeveloperDiagnosticsDto(
+            result.Understanding,
+            result.AgentRun,
+            result.AgentRun?.Steps.Count > 0,
+            result.AgentRun?.Plan.Source));
 
 static async Task<ParsedChatRequest> ParseMultipartChatAsync(
     HttpRequest request,

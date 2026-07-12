@@ -82,6 +82,14 @@ export interface ChatResponseDto {
   assistantContent: string;
   understanding: UnderstandingResult;
   agentRun?: AgentRun | null;
+  diagnostics?: DeveloperDiagnostics | null;
+}
+
+export interface DeveloperDiagnostics {
+  understanding: UnderstandingResult;
+  agentRun?: AgentRun | null;
+  toolsUsed: boolean;
+  planSource?: string | null;
 }
 
 export interface ToolDefinition {
