@@ -6,79 +6,53 @@
 Thoth.Web / Thoth.Cli / Thoth.Api
   -> Thoth.Runtime
     -> Thoth.Core
-    -> Thoth.Llm (internal chat contract + self-contained reasoning engine)
+    -> Thoth.Llm
+    -> Thoth.Model / Thoth.Tokenization / Thoth.Training / Thoth.Inference
     -> Thoth.Tools
     -> Thoth.Memory
     -> Thoth.Sandbox
 ```
 
-## Core Concepts
-
-- `AgentEngine` owns the run loop.
-- `IAgentPlanner` creates a tool plan.
-- `IChatModel` is the internal chat/reasoning contract used by Thoth's self-contained engine.
-- `IAgentTool` exposes inspectable capabilities.
-- `IMemoryStore` persists useful context between runs.
-- `IExecutionPolicy` decides whether a tool call is allowed.
-- `IConversationStore` persists chats, messages, and attachments.
-- `IUserUnderstandingService` classifies user intent before routing a turn.
-- `ChatOrchestrator` decides whether to answer directly or run the agent/tools.
-
-## Chat Turn Flow
+## Public Response Path
 
 ```text
-HTTP multipart/json request
-  -> save attachments
+HTTP request or CLI input
+  -> parse request and attachments
   -> understand user intent
-  -> store user message
-  -> if workspace/tool task: run AgentEngine
-  -> otherwise: call the self-contained reasoning engine with conversation history
-  -> store assistant message
-  -> return conversation, understanding, optional run trace
+  -> store the user message
+  -> direct reply or agent run
+  -> store clean assistant content
+  -> return transcript-safe response
 ```
 
-## Agent Run Loop
+The assistant message must be a concise answer or clarification. It must not contain hidden prompts, internal task graphs, critique loops, raw tool traces, or stop reasons.
+
+## Internal Agent Path
 
 ```text
 AgentRequest
-  -> search memory
-  -> create JSON or heuristic plan
-  -> authorize each tool call
-  -> execute tools
-  -> store run observations
-  -> synthesize final answer
-  -> store project memory
+  -> memory lookup
+  -> plan
+  -> policy check
+  -> tool execution
+  -> observations
+  -> synthesis
+  -> run memory
 ```
 
-## Current Tools
+The UI can show this path in the collapsible developer panel. API responses can include structured diagnostics, but normal chat content remains clean.
 
-- `workspace.map`: compact file tree
-- `file.list`: list a workspace directory
-- `file.info`: inspect file or directory metadata
-- `file.read`: read workspace text files
-- `file.search`: search file names and file contents
-- `file.write`: write workspace text files
-- `memory.search`: search local memory
-- `memory.recent`: list recent memory
-- `memory.write`: store local memory
-- `http.get`: fetch text from an HTTP URL
-- `shell.run`: run approved commands when enabled
+## Neural Path
 
-## Safety Defaults
+The runtime can use:
 
-- Shell is disabled by default.
-- File writes are limited to the workspace.
-- Destructive command tokens are blocked by policy.
-- Binary files are skipped by read and search tools.
-- All tool execution produces structured `ToolResult` records.
+- `self`: self-contained useful response model.
+- `hybrid`: qualified checkpoint when available, otherwise self-contained fallback.
+- `neural`: checkpoint only; startup fails if the checkpoint is missing or unqualified.
 
-## Agent Architecture Reference Targets
+Checkpoint quality is inspected through metadata and evaluation metrics before any model is trusted for generation, understanding, or agent decisions.
 
-Thoth should keep moving toward the proven shape used by large open-source agents:
+## Transformer Foundation
 
-- One source of truth for conversation and run state.
-- Agent core exposed through APIs, with the UI acting as a client instead of embedding agent behavior.
-- Event-style run traces that can stream planning, tool calls, observations, and final synthesis.
-- Durable run records so long tasks can resume, be inspected, and be replayed.
-- Composable tools, prompts, memory, and contexts, with safety policy around risky actions.
-- Separate deterministic workflow control from autonomous reasoning, so coding tasks can be predictable while still using tools.
+The decoder-only Transformer foundation is implemented separately from the legacy RNN. It starts from random weights, has its own checkpoint format, and is covered by lightweight CPU correctness tests. It is not claimed to be generally intelligent or production-qualified until training and evaluation artifacts pass the quality gate.
+

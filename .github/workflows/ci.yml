@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: src/Thoth.Web/package-lock.json
+
+      - name: Restore .NET
+        run: dotnet restore Thoth.sln
+
+      - name: Build .NET
+        run: dotnet build Thoth.sln -c Release --no-restore
+
+      - name: Test .NET
+        run: dotnet test Thoth.sln -c Release --no-build
+
+      - name: Install Angular dependencies
+        run: npm ci --prefix src/Thoth.Web
+
+      - name: Build Angular
+        run: npm run build --prefix src/Thoth.Web
+
