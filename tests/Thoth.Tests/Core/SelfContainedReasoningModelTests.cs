@@ -207,6 +207,24 @@ public sealed class SelfContainedReasoningModelTests
         Assert.DoesNotContain("route map", response.Content, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public async Task CompleteAsync_CalculatorMethodRequestReturnsGeneratedCSharp()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [new ChatMessage(ChatRole.User, "can you build C# method work as calculator")],
+            "thoth-self",
+            0));
+
+        Assert.Contains("```csharp", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("public static decimal Calculate", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("'+' => left + right", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("DivideByZeroException", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("route:", response.Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("contract:", response.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData("Hello")]
     [InlineData("\u0627\u0646\u062a \u0641\u0627\u0647\u0645\u0646\u064a")]

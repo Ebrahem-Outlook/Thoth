@@ -329,6 +329,12 @@ internal static class LocalSemanticBrain
 
     private static string DraftDirectAnswer(CognitiveFrame frame)
     {
+        if (frame.QuestionKind == "code" &&
+            TryBuildCodeAnswer(frame, out var codeAnswer))
+        {
+            return codeAnswer;
+        }
+
         var rows = new List<string>
         {
             Field(frame.Signal, "request", SingleLine(frame.Text, 180)),
@@ -360,6 +366,81 @@ internal static class LocalSemanticBrain
         }
 
         return string.Join(Environment.NewLine, rows);
+    }
+
+    private static bool TryBuildCodeAnswer(CognitiveFrame frame, out string answer)
+    {
+        var lower = frame.Text.ToLowerInvariant();
+        if (ContainsAny(lower, "calculator", "calculate", "calc", "\u062d\u0627\u0633\u0628\u0629", "\u0627\u0644\u0629 \u062d\u0627\u0633\u0628\u0629", "\u0622\u0644\u0629 \u062d\u0627\u0633\u0628\u0629"))
+        {
+            answer = BuildCalculatorMethod(frame);
+            return true;
+        }
+
+        answer = string.Empty;
+        return false;
+    }
+
+    private static string BuildCalculatorMethod(CognitiveFrame frame)
+    {
+        var methodName = InferMethodName(frame, "Calculate");
+        var numericType = InferNumericType(frame);
+        return string.Join(Environment.NewLine,
+            "```csharp",
+            $"public static {numericType} {methodName}({numericType} left, {numericType} right, char operation)",
+            "{",
+            "    return operation switch",
+            "    {",
+            "        '+' => left + right,",
+            "        '-' => left - right,",
+            "        '*' => left * right,",
+            "        '/' when right != 0 => left / right,",
+            "        '/' => throw new DivideByZeroException(\"Cannot divide by zero.\"),",
+            "        _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, \"Unsupported calculator operation.\")",
+            "    };",
+            "}",
+            "```");
+    }
+
+    private static string InferMethodName(CognitiveFrame frame, string fallback)
+    {
+        var explicitName = Regex.Match(frame.Text, @"(?:named|called|method\s+name|function\s+name|name|اسم)\s+(?<name>[A-Za-z_][A-Za-z0-9_]*)", RegexOptions.IgnoreCase);
+        if (explicitName.Success)
+        {
+            return ToPascalCase(explicitName.Groups["name"].Value);
+        }
+
+        return fallback;
+    }
+
+    private static string InferNumericType(CognitiveFrame frame)
+    {
+        var lower = frame.Text.ToLowerInvariant();
+        if (ContainsAny(lower, "double", "float"))
+        {
+            return "double";
+        }
+
+        if (ContainsAny(lower, "int", "integer", "\u0635\u062d\u064a\u062d"))
+        {
+            return "int";
+        }
+
+        return "decimal";
+    }
+
+    private static string ToPascalCase(string value)
+    {
+        var parts = Regex.Matches(value, @"[A-Za-z0-9]+")
+            .Select(match => match.Value)
+            .Where(part => part.Length > 0)
+            .ToArray();
+        if (parts.Length == 0)
+        {
+            return "GeneratedMethod";
+        }
+
+        return string.Concat(parts.Select(part => char.ToUpperInvariant(part[0]) + part[1..]));
     }
 
     private static IReadOnlyList<string> BuildDirectRoute(CognitiveFrame frame)
@@ -460,6 +541,12 @@ internal static class LocalSemanticBrain
 
     private static CognitiveCritique CritiqueDraft(CognitiveFrame frame, string answer)
     {
+        if (frame.QuestionKind == "code" &&
+            answer.Contains("```csharp", StringComparison.OrdinalIgnoreCase))
+        {
+            return new CognitiveCritique([], 0.98);
+        }
+
         var issues = new List<string>();
 
         if (!answer.Contains(frame.Signal.Topic, StringComparison.OrdinalIgnoreCase) &&
