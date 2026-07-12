@@ -104,6 +104,10 @@ Phase 4 processing primitives live in `Thoth.Data.Processing`:
 
 Phase 5 token shards live in `Thoth.Training.TokenShards`. The binary format stores a magic/version header, tokenizer artifact hash, dataset manifest hash, dtype, token count, document boundaries, token payload, and SHA-256 checksum. `TokenShardReader` validates corruption before opening and reads windows by seeking into the file instead of loading the full token set.
 
+## Training Curriculum
+
+`Thoth.Training.Curriculum` defines the local ladder: Stage A mathematical smoke, Stage B pipeline pilot, Stage C laptop-pilot pretraining, Stage D instruction tuning, and optional Stage E laptop-max. Stages C-E require explicit approval and all runs estimated above two hours must print the full approval report first.
+
 ## Instruction JSONL
 
 Each line:
