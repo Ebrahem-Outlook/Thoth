@@ -480,6 +480,16 @@ button {
   max-width: 760px;
 }
 
+.message.clarification .message-body {
+  border-left: 3px solid #10a37f;
+  padding-left: 12px;
+}
+
+.message.limitation .message-body {
+  border-left: 3px solid #d97706;
+  padding-left: 12px;
+}
+
 .avatar {
   width: 34px;
   height: 34px;
@@ -523,6 +533,11 @@ button {
   padding: 2px 7px;
 }
 
+.message-meta .kind-badge {
+  background: #ecfdf5;
+  color: #047857;
+}
+
 .message.user .message-meta em {
   background: rgba(255, 255, 255, 0.12);
 }
@@ -563,6 +578,30 @@ button {
 
 .message.user .markdown :not(pre) > code {
   background: rgba(255, 255, 255, 0.14);
+}
+
+.detail-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.detail-chips span {
+  max-width: 220px;
+  border: 1px solid rgba(16, 163, 127, 0.28);
+  border-radius: 999px;
+  padding: 3px 8px;
+  background: #f0fdf9;
+  color: #047857;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.detail-chips.compact {
+  margin-top: 6px;
 }
 
 .message-actions {
@@ -773,6 +812,7 @@ button {
 
 .run-status,
 .model-quality,
+.active-task-card,
 .tool-list details,
 .memory-card,
 .settings-grid label,
@@ -789,6 +829,31 @@ button {
   display: grid;
   gap: 5px;
   margin-bottom: 12px;
+}
+
+.active-task-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  margin-bottom: 12px;
+  border-color: rgba(16, 163, 127, 0.36);
+  background: #f8fffc;
+}
+
+.active-task-card p {
+  margin: 5px 0 0;
+  color: #4b5563;
+  line-height: 1.45;
+}
+
+.active-task-card button {
+  height: 30px;
+  border-radius: 8px;
+  padding: 0 10px;
+  background: #111827;
+  color: #fff;
+  cursor: pointer;
 }
 
 .run-status.ok {

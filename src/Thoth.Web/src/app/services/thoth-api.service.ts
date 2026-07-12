@@ -3,6 +3,7 @@ import { Injectable, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import { environment } from '../../environments/environment';
 import {
+  ActiveTaskDto,
   ChatResponseDto,
   ClientConfig,
   Conversation,
@@ -48,6 +49,14 @@ export class ThothApiService {
 
   deleteConversation(id: string): Observable<void> {
     return this.http.delete<void>(`${this.baseUrl}/api/conversations/${id}`);
+  }
+
+  getActiveTask(conversationId: string): Observable<ActiveTaskDto> {
+    return this.http.get<ActiveTaskDto>(`${this.baseUrl}/api/conversations/${conversationId}/active-task`);
+  }
+
+  cancelActiveTask(conversationId: string): Observable<void> {
+    return this.http.delete<void>(`${this.baseUrl}/api/conversations/${conversationId}/active-task`);
   }
 
   sendMessage(

@@ -66,10 +66,17 @@ public sealed class ChatOrchestrator(
 
         AgentRun? agentRun = null;
         string assistantText;
+        AssistantResponseKind assistantKind;
+        IReadOnlyList<string> suggestedDetails = [];
+        string? responseTaskSummary = activeTaskSummary;
 
         if (codeTask is not null)
         {
-            assistantText = await HandleCodeTaskAsync(codeTask, userMessage, request.Content, cancellationToken);
+            var taskResponse = await HandleCodeTaskAsync(codeTask, userMessage, request.Content, cancellationToken);
+            assistantText = taskResponse.Content;
+            assistantKind = taskResponse.Kind;
+            suggestedDetails = taskResponse.SuggestedDetails;
+            responseTaskSummary = taskResponse.ActiveTaskSummary;
         }
         else if (request.UseTools && understood.RequiresTools)
         {
@@ -78,10 +85,12 @@ public sealed class ChatOrchestrator(
                 new AgentRequest(goal, request.WorkingDirectory, request.Model, request.MaxSteps),
                 cancellationToken);
             assistantText = agentRun.FinalAnswer;
+            assistantKind = AssistantResponseKind.ToolResultSummary;
         }
         else
         {
             assistantText = await ReplyDirectlyAsync(request, conversation.Id, attachments, understood, cancellationToken);
+            assistantKind = AssistantResponseKind.DirectAnswer;
         }
 
         var assistantMessage = await conversations.AddMessageAsync(
@@ -95,14 +104,16 @@ public sealed class ChatOrchestrator(
                 understood.Topic,
                 understood.RequiresTools,
                 agentRunId = agentRun?.RunId,
-                activeTask = activeTaskSummary
+                assistantKind = assistantKind.ToString(),
+                suggestedDetails,
+                activeTaskSummary = responseTaskSummary
             }),
             cancellationToken: cancellationToken);
 
         var detail = await conversations.GetAsync(conversation.Id, cancellationToken)
                      ?? new ConversationDetail(conversation, [userMessage, assistantMessage]);
 
-        return new ChatTurnResult(detail, userMessage, assistantMessage, understood, agentRun);
+        return new ChatTurnResult(detail, userMessage, assistantMessage, understood, agentRun, assistantKind, suggestedDetails, responseTaskSummary);
     }
 
     private CodeGenerationTask? BuildCodeTask(
@@ -123,7 +134,7 @@ public sealed class ChatOrchestrator(
         return codeTasks.ExtractNewTask(conversationId, content);
     }
 
-    private async Task<string> HandleCodeTaskAsync(
+    private async Task<AssistantTaskResponse> HandleCodeTaskAsync(
         CodeGenerationTask task,
         ConversationMessage userMessage,
         string requestContent,
@@ -134,12 +145,20 @@ public sealed class ChatOrchestrator(
 
         if (!withTurn.IsReady)
         {
-            return TaskResponseComposer.CreateClarification(withTurn, requestContent);
+            return new AssistantTaskResponse(
+                AssistantResponseKind.Clarification,
+                TaskResponseComposer.CreateClarification(withTurn, requestContent),
+                withTurn.MissingSlots,
+                SummarizeTask(withTurn));
         }
 
         if (!procedures.TryExecute(withTurn, out var generated))
         {
-            return "I understood the coding task, but I do not have a verified local procedure for that exact behavior yet.";
+            return new AssistantTaskResponse(
+                AssistantResponseKind.CapabilityLimitation,
+                "I understood the coding task, but I do not have a verified local procedure for that exact behavior yet.",
+                [],
+                SummarizeTask(withTurn));
         }
 
         var completed = withTurn with
@@ -149,7 +168,11 @@ public sealed class ChatOrchestrator(
             Version = withTurn.Version + 1
         };
         await conversationTasks.SaveAsync(completed, "task.completed", userMessage.Id, cancellationToken);
-        return generated.Content;
+        return new AssistantTaskResponse(
+            AssistantResponseKind.DirectAnswer,
+            generated.Content,
+            [],
+            SummarizeTask(completed));
     }
 
     private async Task<string> ReplyDirectlyAsync(
@@ -209,8 +232,14 @@ public sealed class ChatOrchestrator(
         }
 
         var missing = task.MissingSlots.Count == 0 ? "none" : string.Join(", ", task.MissingSlots);
-        return $"code_generation status={task.Status}; language={task.Language.DisplayName()}; artifact={task.ArtifactKind}; behavior={task.Behavior ?? "unknown"}; missing={missing}";
+        return $"Code task: {task.Language.DisplayName()} {task.ArtifactKind} for {task.Behavior ?? "unspecified behavior"}; status {task.Status}; missing {missing}.";
     }
+
+    private sealed record AssistantTaskResponse(
+        AssistantResponseKind Kind,
+        string Content,
+        IReadOnlyList<string> SuggestedDetails,
+        string? ActiveTaskSummary);
 
     private static string BuildAgentGoal(
         string content,

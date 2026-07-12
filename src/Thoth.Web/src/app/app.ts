@@ -31,6 +31,8 @@ import {
 } from '@lucide/angular';
 import {
   AgentRun,
+  ActiveTaskDto,
+  AssistantKind,
   ChatResponseDto,
   ClientConfig,
   Conversation,
@@ -113,6 +115,7 @@ export class App implements OnInit, OnDestroy {
   readonly workspaceSummary = signal<WorkspaceSummary | null>(null);
   readonly systemStatus = signal<SystemStatus | null>(null);
   readonly lastRun = signal<AgentRun | null>(null);
+  readonly activeTask = signal<ActiveTaskDto | null>(null);
   readonly activePanel = signal<SidePanel>('run');
   readonly sidebarOpen = signal(true);
   readonly rightPanelOpen = signal(false);
@@ -155,12 +158,18 @@ export class App implements OnInit, OnDestroy {
     }
 
     const qualified = this.isCheckpointQualified(status.checkpointState || status.modelStatus);
-    return [
+    const chips: StatusChip[] = [
       { label: 'Provider', value: status.activeProvider || status.runtimeMode, tone: 'neutral' },
       { label: 'Checkpoint', value: status.checkpointState || status.modelStatus, tone: qualified ? 'ok' : 'warn' },
       { label: 'Quality', value: status.qualityQualification || 'unknown', tone: qualified ? 'ok' : 'warn' },
       { label: 'Tools', value: this.useTools() && status.toolsActive ? 'active' : 'off', tone: this.useTools() && status.toolsActive ? 'ok' : 'warn' },
     ];
+
+    if (this.activeTask()) {
+      chips.push({ label: 'Task', value: this.activeTask()?.status ?? 'active', tone: 'neutral' });
+    }
+
+    return chips;
   });
 
   ngOnInit(): void {
@@ -226,6 +235,7 @@ export class App implements OnInit, OnDestroy {
         this.selectedConversation.set(detail);
         this.transientMessages.set([]);
         this.lastRun.set(null);
+        this.refreshActiveTask(id);
         if (this.isCompactViewport()) {
           this.sidebarOpen.set(false);
         }
@@ -239,6 +249,7 @@ export class App implements OnInit, OnDestroy {
     this.selectedConversation.set(null);
     this.transientMessages.set([]);
     this.lastRun.set(null);
+    this.activeTask.set(null);
     this.composerText.set('');
     this.clearFiles();
     if (this.isCompactViewport()) {
@@ -264,6 +275,7 @@ export class App implements OnInit, OnDestroy {
       next: () => {
         if (this.activeConversationId() === conversation.id) {
           this.selectedConversation.set(null);
+          this.activeTask.set(null);
         }
         this.loadConversations();
       },
@@ -277,6 +289,7 @@ export class App implements OnInit, OnDestroy {
       next: () => {
         if (this.activeConversationId() === conversation.id) {
           this.selectedConversation.set(null);
+          this.activeTask.set(null);
         }
         this.loadConversations();
       },
@@ -379,6 +392,15 @@ export class App implements OnInit, OnDestroy {
   applyChatResponse(response: ChatResponseDto): void {
     this.transientMessages.set([]);
     this.lastRun.set(response.agentRun ?? null);
+    if (response.activeTaskSummary) {
+      this.activeTask.set({
+        taskId: response.assistantMessageId,
+        taskType: 'response',
+        status: response.assistantKind,
+        summary: response.activeTaskSummary,
+        missingSlots: response.suggestedDetails ?? [],
+      });
+    }
     this.activePanel.set(response.agentRun ? 'run' : 'memory');
     this.busy.set(false);
     this.loadConversations();
@@ -573,6 +595,32 @@ export class App implements OnInit, OnDestroy {
       .replace(/\b\w/g, (letter) => letter.toUpperCase());
   }
 
+  assistantKind(message: ConversationMessage): AssistantKind | '' {
+    const metadata = this.messageMetadata(message);
+    return (metadata?.['assistantKind'] ?? '') as AssistantKind | '';
+  }
+
+  kindLabel(kind: AssistantKind | ''): string {
+    return kind ? kind.replace(/([a-z])([A-Z])/g, '$1 $2') : '';
+  }
+
+  suggestedDetails(message: ConversationMessage): string[] {
+    const value = this.messageMetadata(message)?.['suggestedDetails'];
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
+  }
+
+  cancelActiveTask(): void {
+    const conversationId = this.activeConversationId();
+    if (!conversationId || !this.activeTask()) {
+      return;
+    }
+
+    this.api.cancelActiveTask(conversationId).subscribe({
+      next: () => this.activeTask.set(null),
+      error: () => this.error.set('Could not reset the active task.'),
+    });
+  }
+
   isCheckpointQualified(status?: string | null): boolean {
     return !!status?.startsWith('Qualified');
   }
@@ -604,6 +652,25 @@ export class App implements OnInit, OnDestroy {
 
     textarea.style.height = 'auto';
     textarea.style.height = `${Math.min(textarea.scrollHeight, 180)}px`;
+  }
+
+  private refreshActiveTask(conversationId: string): void {
+    this.api.getActiveTask(conversationId).subscribe({
+      next: (task) => this.activeTask.set(task),
+      error: () => this.activeTask.set(null),
+    });
+  }
+
+  private messageMetadata(message: ConversationMessage): Record<string, unknown> | null {
+    if (!message.metadataJson) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(message.metadataJson) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
   }
 
   private scrollToBottom(behavior: ScrollBehavior = 'smooth'): void {

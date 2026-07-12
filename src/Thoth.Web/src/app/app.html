@@ -193,6 +193,8 @@
           [class.assistant]="messageRole(message) === 'assistant'"
           [class.tool]="messageRole(message) === 'tool'"
           [class.system]="messageRole(message) === 'system'"
+          [class.clarification]="assistantKind(message) === 'Clarification'"
+          [class.limitation]="assistantKind(message) === 'CapabilityLimitation'"
         >
           <div class="avatar">
             @if (messageRole(message) === 'assistant') {
@@ -207,6 +209,9 @@
               <span>{{ message.createdAt | date: 'shortTime' }}</span>
               @if (message.intent) {
                 <em>{{ formatIntent(message.intent) }}</em>
+              }
+              @if (assistantKind(message); as kind) {
+                <em class="kind-badge">{{ kindLabel(kind) }}</em>
               }
             </div>
 
@@ -228,6 +233,14 @@
             }
 
             <div class="markdown" [innerHTML]="message.content | markdown"></div>
+
+            @if (suggestedDetails(message).length) {
+              <div class="detail-chips" aria-label="Requested details">
+                @for (detail of suggestedDetails(message); track detail) {
+                  <span>{{ detail }}</span>
+                }
+              </div>
+            }
 
             @if (messageRole(message) === 'assistant') {
               <div class="message-actions">
@@ -352,6 +365,22 @@
     @if (activePanel() === 'run') {
       <section class="panel-section">
         <h2>Run</h2>
+        @if (activeTask(); as task) {
+          <div class="active-task-card">
+            <div>
+              <strong>{{ task.status }}</strong>
+              <p>{{ task.summary }}</p>
+              @if (task.missingSlots.length) {
+                <div class="detail-chips compact">
+                  @for (slot of task.missingSlots; track slot) {
+                    <span>{{ slot }}</span>
+                  }
+                </div>
+              }
+            </div>
+            <button type="button" (click)="cancelActiveTask()">Reset</button>
+          </div>
+        }
         @if (lastRun()) {
           <div class="run-status" [class.ok]="lastRun()?.succeeded">
             <strong>{{ lastRun()?.succeeded ? 'Succeeded' : 'Needs attention' }}</strong>

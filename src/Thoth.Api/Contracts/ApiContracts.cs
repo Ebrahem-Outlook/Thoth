@@ -19,10 +19,20 @@ public sealed record ChatResponseDto(
     Guid ConversationId,
     Guid UserMessageId,
     Guid AssistantMessageId,
+    string AssistantKind,
     string AssistantContent,
+    IReadOnlyList<string> SuggestedDetails,
+    string? ActiveTaskSummary,
     object Understanding,
     object? AgentRun,
     DeveloperDiagnosticsDto? Diagnostics = null);
+
+public sealed record ActiveTaskDto(
+    Guid TaskId,
+    string TaskType,
+    string Status,
+    string Summary,
+    IReadOnlyList<string> MissingSlots);
 
 public sealed record DeveloperDiagnosticsDto(
     object Understanding,

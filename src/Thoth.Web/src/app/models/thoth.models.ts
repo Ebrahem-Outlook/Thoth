@@ -75,14 +75,32 @@ export interface AgentRun {
   steps: AgentStep[];
 }
 
+export type AssistantKind =
+  | 'DirectAnswer'
+  | 'Clarification'
+  | 'ToolResultSummary'
+  | 'CapabilityLimitation'
+  | 'Error';
+
 export interface ChatResponseDto {
   conversationId: string;
   userMessageId: string;
   assistantMessageId: string;
+  assistantKind: AssistantKind;
   assistantContent: string;
+  suggestedDetails: string[];
+  activeTaskSummary?: string | null;
   understanding: UnderstandingResult;
   agentRun?: AgentRun | null;
   diagnostics?: DeveloperDiagnostics | null;
+}
+
+export interface ActiveTaskDto {
+  taskId: string;
+  taskType: string;
+  status: string;
+  summary: string;
+  missingSlots: string[];
 }
 
 export interface DeveloperDiagnostics {

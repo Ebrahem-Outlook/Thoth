@@ -5,6 +5,8 @@ using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 using Thoth.Api.Contracts;
 using Thoth.Api.Services;
+using Thoth.Cognition.Concepts;
+using Thoth.Cognition.Tasks;
 using Thoth.Core.Agent;
 using Thoth.Core.Configuration;
 using Thoth.Core.Conversations;
@@ -218,6 +220,36 @@ app.MapDelete("/api/conversations/{conversationId:guid}", async (
         : Results.NotFound();
 });
 
+app.MapGet("/api/conversations/{conversationId:guid}/active-task", async (
+    Guid conversationId,
+    IConversationTaskStore taskStore,
+    CancellationToken cancellationToken) =>
+{
+    var task = await taskStore.GetActiveAsync(conversationId, cancellationToken);
+    return task is null ? Results.NotFound() : Results.Ok(ToActiveTaskDto(task));
+});
+
+app.MapDelete("/api/conversations/{conversationId:guid}/active-task", async (
+    Guid conversationId,
+    IConversationTaskStore taskStore,
+    CancellationToken cancellationToken) =>
+{
+    var task = await taskStore.GetActiveAsync(conversationId, cancellationToken);
+    if (task is null)
+    {
+        return Results.NotFound();
+    }
+
+    var cancelled = task with
+    {
+        Status = Thoth.Cognition.Tasks.TaskStatus.Abandoned,
+        UpdatedAt = DateTimeOffset.UtcNow,
+        Version = task.Version + 1
+    };
+    await taskStore.SaveAsync(cancelled, "task.cancelled", null, cancellationToken);
+    return Results.NoContent();
+});
+
 app.MapPost("/api/chat", async (
     HttpRequest httpRequest,
     ChatOrchestrator orchestrator,
@@ -414,7 +446,10 @@ static ChatResponseDto ToDto(ChatTurnResult result) =>
         result.Conversation.Conversation.Id,
         result.UserMessage.Id,
         result.AssistantMessage.Id,
+        result.AssistantKind.ToString(),
         result.AssistantMessage.Content,
+        result.SuggestedDetails ?? [],
+        result.ActiveTaskSummary,
         result.Understanding,
         result.AgentRun,
         new DeveloperDiagnosticsDto(
@@ -422,6 +457,14 @@ static ChatResponseDto ToDto(ChatTurnResult result) =>
             result.AgentRun,
             result.AgentRun?.Steps.Count > 0,
             result.AgentRun?.Plan.Source));
+
+static ActiveTaskDto ToActiveTaskDto(CodeGenerationTask task) =>
+    new(
+        task.Id,
+        "code_generation",
+        task.Status.ToString(),
+        $"Code task: {task.Language.DisplayName()} {task.ArtifactKind} for {task.Behavior ?? "unspecified behavior"}; missing {(task.MissingSlots.Count == 0 ? "none" : string.Join(", ", task.MissingSlots))}.",
+        task.MissingSlots);
 
 static async Task<ParsedChatRequest> ParseMultipartChatAsync(
     HttpRequest request,
