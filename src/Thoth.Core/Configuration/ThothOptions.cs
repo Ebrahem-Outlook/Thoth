@@ -54,6 +54,14 @@ public sealed class CheckpointQualityOptions
     public double MinimumUnderstandingScore { get; set; } = 0.9;
 
     public double MinimumAgentDecisionScore { get; set; } = 0.9;
+
+    public double MinimumLanguageHealthScore { get; set; } = 0.8;
+
+    public double MinimumLeakageScore { get; set; } = 1.0;
+
+    public double MinimumDeterministicLoadingScore { get; set; } = 1.0;
+
+    public double MinimumTaskBenchmarkScore { get; set; } = 0.7;
 }
 
 public sealed class SandboxOptions

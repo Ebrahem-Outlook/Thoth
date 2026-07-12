@@ -36,7 +36,7 @@ public sealed class ModelCheckpointTests
     }
 
     [Fact]
-    public async Task QualityGate_UnqualifiedWithoutEvaluationMetrics()
+    public async Task QualityGate_ExperimentalOnlyWithoutEvaluationMetrics()
     {
         var tokenizer = new ByteTokenizer();
         var model = new RecurrentLanguageModel(new NeuralModelConfig(
@@ -52,7 +52,7 @@ public sealed class ModelCheckpointTests
         await ModelCheckpoint.SaveAsync(path, model);
         var inspection = await ModelCheckpointQualityGate.InspectAsync(path);
 
-        Assert.Equal(ModelCheckpointStatus.Unqualified, inspection.Status);
+        Assert.Equal(ModelCheckpointStatus.ExperimentalOnly, inspection.Status);
         Assert.False(inspection.CanUse(ModelRole.Generation));
         Assert.False(inspection.CanUse(ModelRole.Understanding));
         Assert.False(inspection.CanUse(ModelRole.AgentDecision));
@@ -87,7 +87,10 @@ public sealed class ModelCheckpointTests
                     new Dictionary<string, double>
                     {
                         ["generation_health"] = 1,
-                        ["no_internal_leak"] = 1
+                        ["language_health"] = 1,
+                        ["no_internal_leak"] = 1,
+                        ["deterministic_loading"] = 1,
+                        ["minimum_task_benchmarks"] = 1
                     })));
 
         var generation = await ModelCheckpointQualityGate.InspectAsync(path);
@@ -107,7 +110,10 @@ public sealed class ModelCheckpointTests
                     new Dictionary<string, double>
                     {
                         ["generation_health"] = 1,
+                        ["language_health"] = 1,
                         ["no_internal_leak"] = 1,
+                        ["deterministic_loading"] = 1,
+                        ["minimum_task_benchmarks"] = 1,
                         ["language_detection"] = 1,
                         ["tool_routing"] = 1,
                         ["structured_agent_decision"] = 1

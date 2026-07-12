@@ -863,7 +863,11 @@ public static class CliApp
             options.Model.Quality.MaximumPerplexity,
             options.Model.Quality.MinimumGenerationHealthScore,
             options.Model.Quality.MinimumUnderstandingScore,
-            options.Model.Quality.MinimumAgentDecisionScore);
+            options.Model.Quality.MinimumAgentDecisionScore,
+            options.Model.Quality.MinimumLanguageHealthScore,
+            options.Model.Quality.MinimumLeakageScore,
+            options.Model.Quality.MinimumDeterministicLoadingScore,
+            options.Model.Quality.MinimumTaskBenchmarkScore);
 
     private static bool IsTransformer(ParsedArguments parsed) =>
         (parsed.GetValue("--architecture") ?? parsed.GetValue("--arch") ?? string.Empty)

@@ -10,6 +10,7 @@ public enum ModelCheckpointStatus
     Missing,
     LoadingFailed,
     Unqualified,
+    ExperimentalOnly,
     QualifiedForGeneration,
     QualifiedForUnderstanding,
     QualifiedForAgentDecisions
@@ -29,7 +30,11 @@ public sealed record CheckpointQualityThresholds(
     double MaximumPerplexity = 3_000.0,
     double MinimumGenerationHealthScore = 0.80,
     double MinimumUnderstandingScore = 0.90,
-    double MinimumAgentDecisionScore = 0.90);
+    double MinimumAgentDecisionScore = 0.90,
+    double MinimumLanguageHealthScore = 0.80,
+    double MinimumLeakageScore = 1.0,
+    double MinimumDeterministicLoadingScore = 1.0,
+    double MinimumTaskBenchmarkScore = 0.70);
 
 public sealed record CheckpointEvaluationMetrics(
     int EvaluatedTokens,
@@ -184,7 +189,7 @@ public static class ModelCheckpointQualityGate
             fullPath,
             MetadataPath(fullPath),
             metadata,
-            status == ModelCheckpointStatus.Unqualified ? reasons.ToArray() : []);
+            status is ModelCheckpointStatus.Unqualified or ModelCheckpointStatus.ExperimentalOnly ? reasons.ToArray() : []);
     }
 
     public static async Task<ModelCheckpointMetadata?> LoadMetadataAsync(
@@ -330,10 +335,6 @@ public static class ModelCheckpointQualityGate
             reasons.Add($"optimizer step {metadata.OptimizerStep} is below required {thresholds.MinimumOptimizerSteps}");
         }
 
-        if (metadata.Metrics is null)
-        {
-            reasons.Add("mandatory evaluation metrics are missing");
-        }
     }
 
     private static ModelCheckpointStatus DetermineQualifiedStatus(
@@ -344,8 +345,8 @@ public static class ModelCheckpointQualityGate
         var metrics = metadata.Metrics;
         if (metrics is null)
         {
-            reasons.Add("mandatory evaluation metrics are missing");
-            return ModelCheckpointStatus.Unqualified;
+            reasons.Add("mandatory evaluation metrics are missing; checkpoint remains experimental only");
+            return ModelCheckpointStatus.ExperimentalOnly;
         }
 
         if (metrics.EvaluatedTokens < thresholds.MinimumEvaluatedTokens)
@@ -368,8 +369,11 @@ public static class ModelCheckpointQualityGate
             return ModelCheckpointStatus.Unqualified;
         }
 
-        var generation = Score(metrics, "generation_health") >= thresholds.MinimumGenerationHealthScore;
-        var noLeaks = Score(metrics, "no_internal_leak") >= thresholds.MinimumGenerationHealthScore;
+        var generation = Score(metrics, "generation_health") >= thresholds.MinimumGenerationHealthScore &&
+                         Score(metrics, "language_health") >= thresholds.MinimumLanguageHealthScore &&
+                         Score(metrics, "no_internal_leak") >= thresholds.MinimumLeakageScore &&
+                         Score(metrics, "deterministic_loading") >= thresholds.MinimumDeterministicLoadingScore &&
+                         Score(metrics, "minimum_task_benchmarks") >= thresholds.MinimumTaskBenchmarkScore;
         var understanding = Score(metrics, "language_detection") >= thresholds.MinimumUnderstandingScore &&
                             Score(metrics, "tool_routing") >= thresholds.MinimumUnderstandingScore;
         var agent = understanding &&
@@ -385,7 +389,7 @@ public static class ModelCheckpointQualityGate
             return ModelCheckpointStatus.QualifiedForUnderstanding;
         }
 
-        if (generation && noLeaks)
+        if (generation)
         {
             return ModelCheckpointStatus.QualifiedForGeneration;
         }

@@ -174,7 +174,11 @@ public static class ThothRuntimeServiceCollectionExtensions
             options.MaximumPerplexity,
             options.MinimumGenerationHealthScore,
             options.MinimumUnderstandingScore,
-            options.MinimumAgentDecisionScore);
+            options.MinimumAgentDecisionScore,
+            options.MinimumLanguageHealthScore,
+            options.MinimumLeakageScore,
+            options.MinimumDeterministicLoadingScore,
+            options.MinimumTaskBenchmarkScore);
 
     private static string ResolvePath(string path)
     {

@@ -426,7 +426,11 @@ static Task<ModelCheckpointInspection> InspectModelAsync(
             options.Model.Quality.MaximumPerplexity,
             options.Model.Quality.MinimumGenerationHealthScore,
             options.Model.Quality.MinimumUnderstandingScore,
-            options.Model.Quality.MinimumAgentDecisionScore),
+            options.Model.Quality.MinimumAgentDecisionScore,
+            options.Model.Quality.MinimumLanguageHealthScore,
+            options.Model.Quality.MinimumLeakageScore,
+            options.Model.Quality.MinimumDeterministicLoadingScore,
+            options.Model.Quality.MinimumTaskBenchmarkScore),
         cancellationToken);
 
 static string QualityQualification(ModelCheckpointStatus status) =>
@@ -435,6 +439,7 @@ static string QualityQualification(ModelCheckpointStatus status) =>
         ModelCheckpointStatus.QualifiedForAgentDecisions => "agent decisions",
         ModelCheckpointStatus.QualifiedForUnderstanding => "understanding",
         ModelCheckpointStatus.QualifiedForGeneration => "generation",
+        ModelCheckpointStatus.ExperimentalOnly => "experimental only",
         ModelCheckpointStatus.Unqualified => "unqualified",
         ModelCheckpointStatus.Missing => "missing",
         ModelCheckpointStatus.LoadingFailed => "loading failed",

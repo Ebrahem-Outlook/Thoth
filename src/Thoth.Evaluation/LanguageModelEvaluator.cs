@@ -45,15 +45,16 @@ public static class LanguageModelEvaluator
         }
 
         var averageLoss = totalLoss / Math.Max(evaluatedTokens, 1);
+        var perplexity = Math.Exp(Math.Min(averageLoss, 20));
         return new EvaluationReport(
             evaluatedTokens,
             sequences,
             averageLoss,
-            Math.Exp(Math.Min(averageLoss, 20)),
+            perplexity,
             new Dictionary<string, double>
             {
-                ["generation_health"] = double.IsFinite(averageLoss) ? 1.0 : 0.0,
-                ["no_internal_leak"] = 1.0
+                ["loss_health"] = ComputeLossHealth(averageLoss, perplexity),
+                ["finite_loss"] = double.IsFinite(averageLoss) ? 1.0 : 0.0
             });
     }
 
@@ -91,15 +92,28 @@ public static class LanguageModelEvaluator
         }
 
         var averageLoss = totalLoss / Math.Max(evaluatedTokens, 1);
+        var perplexity = Math.Exp(Math.Min(averageLoss, 20));
         return new EvaluationReport(
             evaluatedTokens,
             sequences,
             averageLoss,
-            Math.Exp(Math.Min(averageLoss, 20)),
+            perplexity,
             new Dictionary<string, double>
             {
-                ["generation_health"] = double.IsFinite(averageLoss) ? 1.0 : 0.0,
-                ["no_internal_leak"] = 1.0
+                ["loss_health"] = ComputeLossHealth(averageLoss, perplexity),
+                ["finite_loss"] = double.IsFinite(averageLoss) ? 1.0 : 0.0
             });
+    }
+
+    private static double ComputeLossHealth(double averageLoss, double perplexity)
+    {
+        if (!double.IsFinite(averageLoss) || !double.IsFinite(perplexity))
+        {
+            return 0.0;
+        }
+
+        var lossScore = 1.0 / (1.0 + Math.Max(averageLoss, 0.0));
+        var perplexityScore = 1.0 / (1.0 + Math.Log10(Math.Max(perplexity, 1.0)));
+        return Math.Clamp((lossScore + perplexityScore) / 2.0, 0.0, 1.0);
     }
 }
