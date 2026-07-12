@@ -7,6 +7,10 @@ public static class ModelCheckpoint
     private const string Magic = "THOTH-RNN";
     private const int FormatVersion = 1;
 
+    public const string CurrentFormat = Magic;
+
+    public const int CurrentFormatVersion = FormatVersion;
+
     public static async Task SaveAsync(
         string path,
         RecurrentLanguageModel model,
@@ -67,6 +71,10 @@ public static class ModelCheckpoint
 
             // The stream must be closed before the atomic replacement, especially on Windows.
             File.Move(temporaryPath, fullPath, overwrite: true);
+            await ModelCheckpointQualityGate.SaveMetadataAsync(
+                fullPath,
+                ModelCheckpointMetadata.CreateUnqualified(model),
+                cancellationToken);
         }
         finally
         {

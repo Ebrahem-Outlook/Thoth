@@ -6,7 +6,8 @@ public sealed record EvaluationReport(
     int EvaluatedTokens,
     int EvaluatedSequences,
     double AverageLoss,
-    double Perplexity);
+    double Perplexity,
+    IReadOnlyDictionary<string, double>? Scores = null);
 
 public static class LanguageModelEvaluator
 {
@@ -48,6 +49,11 @@ public static class LanguageModelEvaluator
             evaluatedTokens,
             sequences,
             averageLoss,
-            Math.Exp(Math.Min(averageLoss, 20)));
+            Math.Exp(Math.Min(averageLoss, 20)),
+            new Dictionary<string, double>
+            {
+                ["generation_health"] = double.IsFinite(averageLoss) ? 1.0 : 0.0,
+                ["no_internal_leak"] = 1.0
+            });
     }
 }

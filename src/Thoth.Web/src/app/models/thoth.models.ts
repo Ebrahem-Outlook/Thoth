@@ -137,6 +137,8 @@ export interface SystemStatus {
   conversationCount: number;
   memoryCount: number;
   time: string;
+  modelStatus: string;
+  modelStatusReasons: string[];
 }
 
 export interface MemoryRecord {

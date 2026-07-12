@@ -1,10 +1,20 @@
 # Training data
 
-Place licensed training and validation text under separate directories, for example:
+The default training root is this directory: `data/training`.
+
+Place licensed training, validation, and test text under separate directories:
 
 ```text
-data/training/train/
+data/training/pretrain/
 data/training/validation/
+data/training/test/
+data/training/instructions/
 ```
 
-Do not train on secrets, production databases, private customer content, or code whose license does not permit model training. The corpus loader skips `data`, `node_modules`, `bin`, `obj`, `.git`, and build-output directories when a source tree is used.
+Instruction/chat examples use JSONL:
+
+```json
+{"id":"ar-ts-001","language":"ar","task":"clarification","messages":[{"role":"user","content":"ممكن تبني method Type script"},{"role":"assistant","content":"أكيد. الميثود في TypeScript مطلوب منها تعمل إيه؟ ابعت المدخلات والناتج المتوقع وأي قواعد validation مهمة."}]}
+```
+
+Do not train on secrets, production databases, private customer content, generated uploads, checkpoints, SQLite files, or code whose license does not permit model training. The corpus loader records a deterministic manifest with file hashes and token counts.

@@ -35,6 +35,25 @@ public sealed class ModelOptions
     public int SequenceLength { get; set; } = 128;
 
     public int Seed { get; set; } = 1337;
+
+    public CheckpointQualityOptions Quality { get; set; } = new();
+}
+
+public sealed class CheckpointQualityOptions
+{
+    public long MinimumOptimizerSteps { get; set; } = 1;
+
+    public int MinimumEvaluatedTokens { get; set; } = 32;
+
+    public double MaximumAverageLoss { get; set; } = 8.0;
+
+    public double MaximumPerplexity { get; set; } = 3000.0;
+
+    public double MinimumGenerationHealthScore { get; set; } = 0.8;
+
+    public double MinimumUnderstandingScore { get; set; } = 0.9;
+
+    public double MinimumAgentDecisionScore { get; set; } = 0.9;
 }
 
 public sealed class SandboxOptions

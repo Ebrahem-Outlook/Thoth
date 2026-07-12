@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -43,6 +44,7 @@ public static class CliApp
                 "train" => await RunTrainAsync(host.Services, rest, cancellationToken),
                 "generate" => await RunGenerateAsync(host.Services, rest, cancellationToken),
                 "evaluate" => await RunEvaluateAsync(host.Services, rest, cancellationToken),
+                "model-status" => await RunModelStatusAsync(host.Services, rest, cancellationToken),
                 "tools" => RunTools(host.Services, rest),
                 "memory" => await RunMemoryAsync(host.Services, rest, cancellationToken),
                 "config" => RunConfig(host.Services, rest),
@@ -139,12 +141,10 @@ public static class CliApp
         var parsed = ParsedArguments.Parse(args);
         var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
         var tokenizer = services.GetRequiredService<ITextTokenizer>();
-        var dataPath = parsed.GetValue("--data") ?? parsed.RemainingText;
-        if (string.IsNullOrWhiteSpace(dataPath))
-        {
-            Console.Error.WriteLine("Missing corpus path. Use: thoth train --data ./corpus");
-            return 2;
-        }
+        var dataPath = parsed.GetValue("--data") ??
+                       (!string.IsNullOrWhiteSpace(parsed.RemainingText)
+                           ? parsed.RemainingText
+                           : Path.Combine(appOptions.DataDirectory, "training"));
 
         var checkpointPath = Path.GetFullPath(parsed.GetValue("--checkpoint") ?? appOptions.Model.CheckpointPath);
         RecurrentLanguageModel model;
@@ -165,8 +165,8 @@ public static class CliApp
             Console.WriteLine($"Created random model with {model.ParameterCount:n0} trainable parameters.");
         }
 
-        var corpus = await CorpusLoader.LoadTokensAsync(dataPath, tokenizer, cancellationToken: cancellationToken);
-        Console.WriteLine($"Loaded {corpus.Length:n0} corpus tokens.");
+        var corpus = await CorpusLoader.LoadCorpusAsync(dataPath, tokenizer, cancellationToken: cancellationToken);
+        Console.WriteLine($"Loaded {corpus.Tokens.Length:n0} corpus tokens from {corpus.Manifest.FileCount:n0} files.");
 
         var options = new TrainingOptions
         {
@@ -193,10 +193,17 @@ public static class CliApp
         });
 
         var report = await new LanguageModelTrainer(model, tokenizer)
-            .TrainAsync(corpus, options, checkpointPath, progress, cancellationToken);
+            .TrainAsync(corpus.Tokens, options, checkpointPath, progress, cancellationToken);
+        var manifestPath = checkpointPath + ".dataset-manifest.json";
+        await CorpusLoader.WriteManifestAsync(manifestPath, corpus.Manifest, cancellationToken);
+        await ModelCheckpointQualityGate.SaveMetadataAsync(
+            checkpointPath,
+            ModelCheckpointMetadata.CreateUnqualified(model, manifestPath),
+            cancellationToken);
 
         Console.WriteLine();
         Console.WriteLine($"Checkpoint: {report.CheckpointPath}");
+        Console.WriteLine($"Dataset manifest: {manifestPath}");
         Console.WriteLine($"Steps: {report.StartingStep:n0} -> {report.CompletedStep:n0}");
         Console.WriteLine($"Loss: {report.InitialLoss:F4} -> {report.FinalLoss:F4}");
         Console.WriteLine($"Tokens seen: {report.TokensSeen:n0}");
@@ -220,6 +227,19 @@ public static class CliApp
         var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
         var tokenizer = services.GetRequiredService<ITextTokenizer>();
         var checkpoint = Path.GetFullPath(parsed.GetValue("--checkpoint") ?? appOptions.Model.CheckpointPath);
+        var inspection = await ModelCheckpointQualityGate.InspectAsync(checkpoint, ToThresholds(appOptions), cancellationToken);
+        if (!inspection.CanUse(ModelRole.Generation) && !parsed.HasFlag("--experimental"))
+        {
+            Console.Error.WriteLine($"Checkpoint is not qualified for generation: {inspection.Status}");
+            foreach (var reason in inspection.Reasons)
+            {
+                Console.Error.WriteLine($"- {reason}");
+            }
+
+            Console.Error.WriteLine("Use --experimental to run raw unqualified generation deliberately.");
+            return 1;
+        }
+
         var model = await ModelCheckpoint.LoadAsync(checkpoint, cancellationToken);
         var text = new NeuralTextGenerator(model, tokenizer).Generate(
             prompt,
@@ -240,29 +260,64 @@ public static class CliApp
         CancellationToken cancellationToken)
     {
         var parsed = ParsedArguments.Parse(args);
-        var dataPath = parsed.GetValue("--data") ?? parsed.RemainingText;
-        if (string.IsNullOrWhiteSpace(dataPath))
-        {
-            Console.Error.WriteLine("Missing evaluation corpus. Use: thoth evaluate --data ./validation.txt");
-            return 2;
-        }
-
         var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
         var tokenizer = services.GetRequiredService<ITextTokenizer>();
+        var dataPath = parsed.GetValue("--data") ??
+                       (!string.IsNullOrWhiteSpace(parsed.RemainingText)
+                           ? parsed.RemainingText
+                           : Path.Combine(appOptions.DataDirectory, "training", "validation"));
         var checkpoint = Path.GetFullPath(parsed.GetValue("--checkpoint") ?? appOptions.Model.CheckpointPath);
         var model = await ModelCheckpoint.LoadAsync(checkpoint, cancellationToken);
-        var tokens = await CorpusLoader.LoadTokensAsync(dataPath, tokenizer, cancellationToken: cancellationToken);
+        var corpus = await CorpusLoader.LoadCorpusAsync(dataPath, tokenizer, cancellationToken: cancellationToken);
         var report = LanguageModelEvaluator.Evaluate(
             model,
-            tokens,
+            corpus.Tokens,
             parsed.TryGetInt("--sequence"),
             parsed.GetInt("--max-sequences", 1000));
+        var reportPath = Path.GetFullPath(parsed.GetValue("--report") ?? checkpoint + ".evaluation.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(reportPath)!);
+        await File.WriteAllTextAsync(
+            reportPath,
+            JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }),
+            cancellationToken);
+
+        var metrics = new CheckpointEvaluationMetrics(
+            report.EvaluatedTokens,
+            report.EvaluatedSequences,
+            report.AverageLoss,
+            report.Perplexity,
+            report.Scores ?? new Dictionary<string, double>());
+        var currentMetadata = await ModelCheckpointQualityGate.LoadMetadataAsync(checkpoint, cancellationToken);
+        await ModelCheckpointQualityGate.SaveMetadataAsync(
+            checkpoint,
+            ModelCheckpointMetadata.CreateUnqualified(
+                model,
+                currentMetadata?.DatasetManifestPath,
+                reportPath,
+                metrics),
+            cancellationToken);
 
         Console.WriteLine($"Evaluated tokens: {report.EvaluatedTokens:n0}");
         Console.WriteLine($"Sequences: {report.EvaluatedSequences:n0}");
         Console.WriteLine($"Average loss: {report.AverageLoss:F6}");
         Console.WriteLine($"Perplexity: {report.Perplexity:F3}");
+        Console.WriteLine($"Report: {reportPath}");
         return 0;
+    }
+
+    private static async Task<int> RunModelStatusAsync(
+        IServiceProvider services,
+        string[] args,
+        CancellationToken cancellationToken)
+    {
+        var parsed = ParsedArguments.Parse(args);
+        var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
+        var checkpoint = Path.GetFullPath(parsed.GetValue("--checkpoint") ?? appOptions.Model.CheckpointPath);
+        var inspection = await ModelCheckpointQualityGate.InspectAsync(checkpoint, ToThresholds(appOptions), cancellationToken);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true };
+        options.Converters.Add(new JsonStringEnumConverter());
+        Console.WriteLine(JsonSerializer.Serialize(inspection, options));
+        return inspection.Status is ModelCheckpointStatus.LoadingFailed ? 1 : 0;
     }
 
     private static int RunTools(IServiceProvider services, string[] args)
@@ -423,8 +478,9 @@ public static class CliApp
         Neural model:
           thoth train --data path [--checkpoint path] [--epochs n] [--steps-per-epoch n]
                       [--sequence n] [--embedding n] [--hidden n] [--lr value] [--fresh]
-          thoth generate "prompt" [--checkpoint path] [--tokens n] [--temperature value] [--top-k n]
-          thoth evaluate --data path [--checkpoint path] [--sequence n]
+          thoth generate "prompt" [--checkpoint path] [--tokens n] [--temperature value] [--top-k n] [--experimental]
+          thoth evaluate [--data path] [--checkpoint path] [--sequence n] [--report path]
+          thoth model-status [--checkpoint path]
 
         Utilities:
           thoth tools list
@@ -434,11 +490,21 @@ public static class CliApp
           thoth config show
 
         Bootstrap example:
-          thoth train --data . --epochs 3 --steps-per-epoch 500
+          thoth train --epochs 3 --steps-per-epoch 500
           thoth evaluate --data ./data/training/validation.txt
           thoth generate "User: Explain this code.\nAssistant:"
         """);
     }
+
+    private static CheckpointQualityThresholds ToThresholds(ThothOptions options) =>
+        new(
+            options.Model.Quality.MinimumOptimizerSteps,
+            options.Model.Quality.MinimumEvaluatedTokens,
+            options.Model.Quality.MaximumAverageLoss,
+            options.Model.Quality.MaximumPerplexity,
+            options.Model.Quality.MinimumGenerationHealthScore,
+            options.Model.Quality.MinimumUnderstandingScore,
+            options.Model.Quality.MinimumAgentDecisionScore);
 
     private sealed record ParsedArguments(
         IReadOnlyDictionary<string, string?> Options,

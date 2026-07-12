@@ -101,7 +101,13 @@ public static class ThothRuntimeServiceCollectionExtensions
             return fallback;
         }
 
-        if (!File.Exists(options.Model.CheckpointPath))
+        var thresholds = ToThresholds(options.Model.Quality);
+        var inspection = ModelCheckpointQualityGate
+            .InspectAsync(options.Model.CheckpointPath, thresholds)
+            .GetAwaiter()
+            .GetResult();
+
+        if (inspection.Status == ModelCheckpointStatus.Missing)
         {
             if (provider == "neural")
             {
@@ -113,8 +119,19 @@ public static class ThothRuntimeServiceCollectionExtensions
             return fallback;
         }
 
+        if (!inspection.CanUse(ModelRole.Generation))
+        {
+            if (provider == "neural")
+            {
+                throw new InvalidOperationException(
+                    $"The selected checkpoint is not qualified for generation: {string.Join("; ", inspection.Reasons)}");
+            }
+
+            return fallback;
+        }
+
         var model = ModelCheckpoint.LoadAsync(options.Model.CheckpointPath).GetAwaiter().GetResult();
-        return new NeuralChatModel(
+        var neural = new NeuralChatModel(
             model,
             tokenizer,
             new GenerationOptions
@@ -124,12 +141,43 @@ public static class ThothRuntimeServiceCollectionExtensions
                 TopK = options.Model.TopK,
                 Seed = options.Model.Seed
             });
+        return new QualityGatedChatModel(neural, fallback, inspection);
     }
+
+    private static CheckpointQualityThresholds ToThresholds(CheckpointQualityOptions options) =>
+        new(
+            options.MinimumOptimizerSteps,
+            options.MinimumEvaluatedTokens,
+            options.MaximumAverageLoss,
+            options.MaximumPerplexity,
+            options.MinimumGenerationHealthScore,
+            options.MinimumUnderstandingScore,
+            options.MinimumAgentDecisionScore);
 
     private static string ResolvePath(string path)
     {
         return Path.IsPathFullyQualified(path)
             ? Path.GetFullPath(path)
             : Path.GetFullPath(Path.Combine(ThothPathDiscovery.FindWorkspaceRoot(Environment.CurrentDirectory), path));
+    }
+
+    private sealed class QualityGatedChatModel(
+        IChatModel neural,
+        IChatModel fallback,
+        ModelCheckpointInspection inspection) : IChatModel
+    {
+        public Task<ChatResponse> CompleteAsync(ChatRequest request, CancellationToken cancellationToken = default)
+        {
+            var role = request.Purpose switch
+            {
+                ModelRequestPurpose.UnderstandUser => ModelRole.Understanding,
+                ModelRequestPurpose.AgentDecision or ModelRequestPurpose.AgentPlan => ModelRole.AgentDecision,
+                _ => ModelRole.Generation
+            };
+
+            return inspection.CanUse(role)
+                ? neural.CompleteAsync(request, cancellationToken)
+                : fallback.CompleteAsync(request, cancellationToken);
+        }
     }
 }

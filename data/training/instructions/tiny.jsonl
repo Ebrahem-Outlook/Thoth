@@ -1,0 +1,1 @@
+{"id":"ar-ts-001","language":"ar","task":"clarification","messages":[{"role":"user","content":"ممكن تبني method Type script"},{"role":"assistant","content":"أكيد. الميثود في TypeScript مطلوب منها تعمل إيه؟ ابعت المدخلات والناتج المتوقع وأي قواعد validation مهمة."}]}

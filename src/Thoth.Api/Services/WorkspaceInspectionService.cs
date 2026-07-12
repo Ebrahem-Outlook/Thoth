@@ -159,4 +159,6 @@ public sealed record SystemStatus(
     int ToolCount,
     int ConversationCount,
     int MemoryCount,
-    DateTimeOffset Time);
+    DateTimeOffset Time,
+    string ModelStatus,
+    IReadOnlyList<string> ModelStatusReasons);

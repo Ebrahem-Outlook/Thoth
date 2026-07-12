@@ -10,6 +10,7 @@ using Thoth.Core.Configuration;
 using Thoth.Core.Conversations;
 using Thoth.Core.Memory;
 using Thoth.Core.Tools;
+using Thoth.Model.Persistence;
 using Thoth.Runtime;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -106,16 +107,36 @@ app.MapGet("/api/system/status", async (
 {
     var conversationCount = (await conversations.ListAsync(limit: 500, cancellationToken: cancellationToken)).Count;
     var memoryCount = (await memory.RecentAsync(limit: 500, cancellationToken: cancellationToken)).Count;
+    var modelStatus = await InspectModelAsync(options.Value, cancellationToken);
 
     return Results.Ok(new SystemStatus(
         options.Value.Model.Provider,
         options.Value.Model.Model,
-        true,
+        modelStatus.Status != ModelCheckpointStatus.QualifiedForGeneration &&
+        modelStatus.Status != ModelCheckpointStatus.QualifiedForUnderstanding &&
+        modelStatus.Status != ModelCheckpointStatus.QualifiedForAgentDecisions,
         options.Value.Sandbox.AllowShell,
         tools.List().Count,
         conversationCount,
         memoryCount,
-        DateTimeOffset.UtcNow));
+        DateTimeOffset.UtcNow,
+        modelStatus.Status.ToString(),
+        modelStatus.Reasons));
+});
+
+app.MapGet("/api/model/status", async (
+    IOptions<ThothOptions> options,
+    CancellationToken cancellationToken) =>
+{
+    var status = await InspectModelAsync(options.Value, cancellationToken);
+    return Results.Ok(new
+    {
+        status = status.Status.ToString(),
+        status.CheckpointPath,
+        status.MetadataPath,
+        status.Reasons,
+        metadata = status.Metadata
+    });
 });
 
 app.MapGet("/api/workspace/summary", (
@@ -356,6 +377,21 @@ static ChatTurnRequest ToChatTurnRequest(ParsedChatRequest parsed, ThothOptions 
         parsed.Model ?? options.Model.Model,
         parsed.UseTools ?? true,
         parsed.MaxSteps ?? options.MaxAgentSteps);
+
+static Task<ModelCheckpointInspection> InspectModelAsync(
+    ThothOptions options,
+    CancellationToken cancellationToken) =>
+    ModelCheckpointQualityGate.InspectAsync(
+        options.Model.CheckpointPath,
+        new CheckpointQualityThresholds(
+            options.Model.Quality.MinimumOptimizerSteps,
+            options.Model.Quality.MinimumEvaluatedTokens,
+            options.Model.Quality.MaximumAverageLoss,
+            options.Model.Quality.MaximumPerplexity,
+            options.Model.Quality.MinimumGenerationHealthScore,
+            options.Model.Quality.MinimumUnderstandingScore,
+            options.Model.Quality.MinimumAgentDecisionScore),
+        cancellationToken);
 
 static ChatResponseDto ToDto(ChatTurnResult result) =>
     new(
