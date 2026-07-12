@@ -114,7 +114,16 @@ public sealed class TorchTransformerLanguageModel : IDisposable
         double gradientClip = 1.0)
     {
         ZeroGrad();
-        var loss = Loss(inputTokenIds, targetTokenIds);
+        var value = AccumulateGradients(inputTokenIds, targetTokenIds);
+        ApplyGradients(learningRate, weightDecay, gradientClip);
+        return value;
+    }
+
+    public void BeginGradientAccumulation() => ZeroGrad();
+
+    public double AccumulateGradients(Tensor inputTokenIds, Tensor targetTokenIds)
+    {
+        using var loss = Loss(inputTokenIds, targetTokenIds);
         var value = loss.ToDouble();
         if (!double.IsFinite(value))
         {
@@ -122,9 +131,14 @@ public sealed class TorchTransformerLanguageModel : IDisposable
         }
 
         loss.backward();
-        StepAdamW(learningRate, weightDecay, gradientClip);
         return value;
     }
+
+    public void ApplyGradients(
+        double learningRate,
+        double weightDecay = 0,
+        double gradientClip = 1.0) =>
+        StepAdamW(learningRate, weightDecay, gradientClip);
 
     public Tensor TensorFrom(long[,] values) =>
         torch.tensor(values, dtype: ScalarType.Int64, device: device);

@@ -25,6 +25,10 @@ The TorchSharp path currently includes:
 
 The pinned dependency is `TorchSharp-cpu` `0.107.0`.
 
+## Local Trainer
+
+`TorchTransformerTrainer` provides a small local training loop over token windows with gradient accumulation, warmup/cosine learning-rate scheduling, finite-loss checks, JSONL logs, tokens/sec reporting, and atomic checkpoint directories. It is intended for smoke and pilot runs only until the full curriculum/evaluation gates are complete.
+
 ## Not Complete Yet
 
 This is not a production-qualified Transformer runtime yet. Remaining Phase 6 work includes:
