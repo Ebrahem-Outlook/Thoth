@@ -100,6 +100,10 @@ Phase 4 processing primitives live in `Thoth.Data.Processing`:
 - `DocumentDeduplicator` rejects exact, normalized, and near-duplicate documents using local hashes and word-shingle similarity.
 - `StableSplitAssigner` assigns `train`, `validation`, or `test` by stable group key so files from the same repository/page/conversation family stay together.
 
+## Token Shards
+
+Phase 5 token shards live in `Thoth.Training.TokenShards`. The binary format stores a magic/version header, tokenizer artifact hash, dataset manifest hash, dtype, token count, document boundaries, token payload, and SHA-256 checksum. `TokenShardReader` validates corruption before opening and reads windows by seeking into the file instead of loading the full token set.
+
 ## Instruction JSONL
 
 Each line:
