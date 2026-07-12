@@ -9,6 +9,7 @@ using Thoth.Core.Agent;
 using Thoth.Core.Configuration;
 using Thoth.Core.Memory;
 using Thoth.Core.Tools;
+using Thoth.Data.Manifests;
 using Thoth.Evaluation;
 using Thoth.Inference;
 using Thoth.Model;
@@ -48,6 +49,7 @@ public static class CliApp
                 "model-status" => await RunModelStatusAsync(host.Services, rest, cancellationToken),
                 "tokenizer" => await RunTokenizerAsync(host.Services, rest, cancellationToken),
                 "hardware" => RunHardware(host.Services, rest),
+                "data" => await RunDataAsync(host.Services, rest, cancellationToken),
                 "tools" => RunTools(host.Services, rest),
                 "memory" => await RunMemoryAsync(host.Services, rest, cancellationToken),
                 "config" => RunConfig(host.Services, rest),
@@ -595,6 +597,33 @@ public static class CliApp
             : 1;
     }
 
+    private static async Task<int> RunDataAsync(
+        IServiceProvider services,
+        string[] args,
+        CancellationToken cancellationToken)
+    {
+        if (args.Length == 0 || IsHelp(args[0]))
+        {
+            Console.WriteLine("Usage: thoth data init-manifests [--output data/manifests]");
+            return 0;
+        }
+
+        var command = args[0].ToLowerInvariant();
+        if (command != "init-manifests")
+        {
+            Console.Error.WriteLine("Unknown data command. Try: thoth data init-manifests");
+            return 2;
+        }
+
+        var parsed = ParsedArguments.Parse(args.Skip(1).ToArray());
+        var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
+        var output = parsed.GetValue("--output") ?? Path.Combine(appOptions.DataDirectory, "manifests");
+
+        await DataManifestWriter.EnsureSkeletonAsync(output, cancellationToken);
+        Console.WriteLine($"Data manifests: {Path.GetFullPath(output)}");
+        return 0;
+    }
+
     private static async Task<int> RunMemoryAsync(
         IServiceProvider services,
         string[] args,
@@ -745,6 +774,7 @@ public static class CliApp
           thoth model-status [--checkpoint path]
 
         Utilities:
+          thoth data init-manifests [--output data/manifests]
           thoth tools list
           thoth memory add "note" [--scope project]
           thoth memory search "query" [--scope project] [--limit n]

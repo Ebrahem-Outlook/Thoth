@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "buildName": "unbuilt-local-dataset",
+  "deterministicSeed": 1337,
+  "policy": "conservative-default",
+  "requiredManifests": [
+    "sources.json",
+    "documents.jsonl",
+    "licenses.json",
+    "exclusions.jsonl",
+    "attribution.md"
+  ],
+  "notes": {
+    "status": "skeleton only; no dataset has been acquired or normalized"
+  }
+}

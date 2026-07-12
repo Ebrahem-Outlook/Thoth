@@ -3,6 +3,7 @@
 ## Repository Map
 
 - `src/Thoth.Core`: chat contracts, conversation orchestration, agent loop, planning, tools, memory contracts, and user understanding.
+- `src/Thoth.Data`: local dataset provenance records, license policy, manifest skeletons, and safety scanners.
 - `src/Thoth.Llm`: self-contained useful response model and deterministic fallback behavior.
 - `src/Thoth.Model`: legacy RNN, decoder-only Transformer foundation, checkpoint formats, and quality gates.
 - `src/Thoth.Tokenization`: UTF-8 byte tokenizer and deterministic byte-level BPE tokenizer.
@@ -38,4 +39,3 @@ dotnet run --project src/Thoth.Cli -- model-status
 ## No-Internal-Leak Invariant
 
 The transcript is for the user. It may contain the user's messages and the final assistant answer or clarification. Agent steps, tool observations, model status, checkpoint reasons, and diagnostics belong in the right-side developer panel, API diagnostics, logs, or CLI output. Do not mix hidden reasoning into normal assistant content.
-
