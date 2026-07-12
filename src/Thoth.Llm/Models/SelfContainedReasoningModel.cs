@@ -152,16 +152,28 @@ public sealed class SelfContainedReasoningModel : IChatModel
     public Task<ChatResponse> CompleteAsync(ChatRequest request, CancellationToken cancellationToken = default)
     {
         var transcript = string.Join("\n", request.Messages.Select(message => message.Content));
-        var content = transcript.Contains("Observations:", StringComparison.OrdinalIgnoreCase)
-            ? CreateFinalAnswer(transcript)
-            : transcript.Contains("Return a JSON plan only", StringComparison.OrdinalIgnoreCase)
-                ? CreatePlan(transcript)
-                : transcript.Contains("Classify the user's message", StringComparison.OrdinalIgnoreCase)
-                    ? CreateUnderstanding(transcript)
+        var lastUserContent = request.Messages.LastOrDefault(message => message.Role == ChatRole.User)?.Content ?? transcript;
+        var content = IsAgentDecisionPrompt(lastUserContent)
+            ? CreateAgentDecision(lastUserContent)
+            : transcript.Contains("Observations:", StringComparison.OrdinalIgnoreCase)
+                ? CreateFinalAnswer(transcript)
+                : IsPlanPrompt(lastUserContent)
+                ? CreatePlan(lastUserContent)
+                : IsUnderstandingPrompt(lastUserContent)
+                    ? CreateUnderstanding(lastUserContent)
                     : CreateDirectReply(request);
 
         return Task.FromResult(new ChatResponse(content, "thoth-self"));
     }
+
+    private static bool IsAgentDecisionPrompt(string content) =>
+        content.TrimStart().StartsWith("Return one JSON agent decision only", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsPlanPrompt(string content) =>
+        content.TrimStart().StartsWith("Return a JSON plan only", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsUnderstandingPrompt(string content) =>
+        content.TrimStart().StartsWith("Classify the user's message", StringComparison.OrdinalIgnoreCase);
 
     private static string CreatePlan(string transcript)
     {
@@ -318,6 +330,125 @@ public sealed class SelfContainedReasoningModel : IChatModel
         };
 
         return JsonSerializer.Serialize(payload);
+    }
+
+    private static string CreateAgentDecision(string transcript)
+    {
+        var goal = ExtractLineAfterLabel(transcript, "Goal:");
+        var observations = ExtractBetweenLabels(transcript, "Executed observations:", "Rules:");
+        var tools = ExtractAvailableTools(transcript);
+        var usedTools = ExtractUsedTools(transcript).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var readPaths = ExtractReadPaths(transcript).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var signal = LocalSemanticBrain.AnalyzeGoal(goal);
+        var lower = goal.ToLowerInvariant();
+
+        if (NeedsWebResearch(lower, goal) && tools.Contains("web.research") && !usedTools.Contains("web.research"))
+        {
+            return AgentToolDecision(
+                "Need fresh public-web evidence before answering.",
+                "web.research",
+                new Dictionary<string, string?>
+                {
+                    ["query"] = ExtractResearchQuery(goal),
+                    ["maxResults"] = "8",
+                    ["maxPages"] = "3"
+                });
+        }
+
+        if (tools.Contains("memory.search") && !usedTools.Contains("memory.search"))
+        {
+            return AgentToolDecision(
+                "Recall relevant project memory before choosing local evidence.",
+                "memory.search",
+                new Dictionary<string, string?>
+                {
+                    ["query"] = goal,
+                    ["limit"] = "6"
+                });
+        }
+
+        if (!NeedsWebResearch(lower, goal) &&
+            tools.Contains("workspace.summary") &&
+            !usedTools.Contains("workspace.summary"))
+        {
+            return AgentToolDecision(
+                "Build a workspace-level frame before inspecting files.",
+                "workspace.summary",
+                new Dictionary<string, string?>
+                {
+                    ["maxEntries"] = "80"
+                });
+        }
+
+        if (!NeedsWebResearch(lower, goal) &&
+            tools.Contains("workspace.map") &&
+            !usedTools.Contains("workspace.map"))
+        {
+            return AgentToolDecision(
+                "Map the project so the next read is targeted.",
+                "workspace.map",
+                new Dictionary<string, string?>
+                {
+                    ["maxDepth"] = "5",
+                    ["maxEntries"] = "280"
+                });
+        }
+
+        var explicitPath = ExtractLikelyPath(goal);
+        if (!string.IsNullOrWhiteSpace(explicitPath) &&
+            tools.Contains("file.read") &&
+            !readPaths.Contains(explicitPath))
+        {
+            return AgentToolDecision(
+                "Read the file named directly by the user.",
+                "file.read",
+                new Dictionary<string, string?>
+                {
+                    ["path"] = explicitPath,
+                    ["maxChars"] = "60000"
+                });
+        }
+
+        var targetedReads = BuildTargetedReads(signal, lower);
+        foreach (var path in targetedReads)
+        {
+            if (tools.Contains("file.read") && !readPaths.Contains(path))
+            {
+                return AgentToolDecision(
+                    $"Read {path} because it is central to the {signal.Topic}/{signal.Action} request.",
+                    "file.read",
+                    new Dictionary<string, string?>
+                    {
+                        ["path"] = path,
+                        ["maxChars"] = "60000"
+                    });
+            }
+        }
+
+        if (tools.Contains("file.search") &&
+            !usedTools.Contains("file.search") &&
+            signal.Topic is "model" or "backend" or "frontend" or "workspace" or "debugging")
+        {
+            return AgentToolDecision(
+                "Search for the strongest remaining concept before final synthesis.",
+                "file.search",
+                new Dictionary<string, string?>
+                {
+                    ["query"] = ExtractSearchQuery(goal),
+                    ["maxResults"] = "50"
+                });
+        }
+
+        if (HasEnoughEvidence(observations, signal))
+        {
+            return AgentFinalDecision(
+                "Collected enough evidence for a grounded final answer.",
+                LocalSemanticBrain.BuildFinalAnswer(goal, observations));
+        }
+
+        return AgentFinalDecision(
+            "No more useful safe action was available; answer from the evidence already collected.",
+            LocalSemanticBrain.BuildFinalAnswer(goal, observations));
     }
 
     private static string CreateUnderstanding(string transcript)
@@ -678,6 +809,112 @@ public sealed class SelfContainedReasoningModel : IChatModel
 
         return string.Join(' ', words);
     }
+
+    private static IReadOnlySet<string> ExtractAvailableTools(string transcript)
+    {
+        var tools = Regex.Matches(transcript, @"^\s*-\s*(?<tool>[\w.]+):", RegexOptions.Multiline)
+            .Select(match => match.Groups["tool"].Value)
+            .Where(tool => tool.Contains('.', StringComparison.Ordinal))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return tools;
+    }
+
+    private static IEnumerable<string> ExtractUsedTools(string transcript) =>
+        Regex.Matches(transcript, @"Tool:\s*(?<tool>[\w.]+)", RegexOptions.IgnoreCase)
+            .Select(match => match.Groups["tool"].Value)
+            .Where(tool => !string.IsNullOrWhiteSpace(tool));
+
+    private static IEnumerable<string> ExtractReadPaths(string transcript) =>
+        Regex.Matches(transcript, @"Tool:\s*file\.read\s+\{[^\n]*""path""\s*:\s*""(?<path>[^""]+)""", RegexOptions.IgnoreCase)
+            .Select(match => match.Groups["path"].Value.Replace('\\', '/'))
+            .Where(path => !string.IsNullOrWhiteSpace(path));
+
+    private static IReadOnlyList<string> BuildTargetedReads(BrainSignal signal, string lowerGoal)
+    {
+        if (signal.Topic == "model" ||
+            ContainsAny(lowerGoal, "thinking", "reasoning", "brain", "decision", "understand", "planner") ||
+            ContainsAny(lowerGoal, "\u064a\u0641\u0643\u0631", "\u062a\u0641\u0643\u064a\u0631", "\u0639\u0642\u0644", "\u064a\u0641\u0647\u0645"))
+        {
+            return
+            [
+                "src/Thoth.Llm/Models/SelfContainedReasoningModel.cs",
+                "src/Thoth.Llm/Models/LocalSemanticBrain.cs",
+                "src/Thoth.Core/Agent/ModelAgentDecisionService.cs",
+                "src/Thoth.Core/Agent/AgentEngine.cs",
+                "src/Thoth.Core/Understanding/HeuristicUnderstandingService.cs",
+                "src/Thoth.Core/Conversations/ChatOrchestrator.cs"
+            ];
+        }
+
+        if (signal.Topic == "backend")
+        {
+            return
+            [
+                "src/Thoth.Api/Program.cs",
+                "src/Thoth.Api/Contracts/ApiContracts.cs",
+                "src/Thoth.Core/Conversations/ChatOrchestrator.cs"
+            ];
+        }
+
+        if (signal.Topic == "frontend")
+        {
+            return
+            [
+                "src/Thoth.Web/src/app/app.ts",
+                "src/Thoth.Web/src/app/app.html",
+                "src/Thoth.Web/src/app/app.scss"
+            ];
+        }
+
+        return [];
+    }
+
+    private static bool HasEnoughEvidence(string observations, BrainSignal signal)
+    {
+        var successfulReads = Regex.Matches(observations, @"Tool:\s*file\.read", RegexOptions.IgnoreCase).Count;
+        var successfulWebResearch = observations.Contains("Tool: web.research", StringComparison.OrdinalIgnoreCase) &&
+                                    observations.Contains("Succeeded: True", StringComparison.OrdinalIgnoreCase);
+
+        if (signal.Topic == "research")
+        {
+            return successfulWebResearch || observations.Contains("URL:", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (signal.Topic == "model")
+        {
+            return successfulReads >= 3 &&
+                   observations.Contains("SelfContainedReasoningModel", StringComparison.OrdinalIgnoreCase) &&
+                   observations.Contains("LocalSemanticBrain", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return successfulReads > 0 ||
+               observations.Contains("workspace.summary", StringComparison.OrdinalIgnoreCase) &&
+               observations.Length > 1200;
+    }
+
+    private static bool NeedsWebResearch(string lower, string text) =>
+        LooksLikeResearchTask(lower, text);
+
+    private static string AgentToolDecision(
+        string rationale,
+        string tool,
+        IReadOnlyDictionary<string, string?> arguments) =>
+        JsonSerializer.Serialize(new
+        {
+            kind = "tool",
+            rationale,
+            tool,
+            arguments
+        });
+
+    private static string AgentFinalDecision(string rationale, string answer) =>
+        JsonSerializer.Serialize(new
+        {
+            kind = "final",
+            rationale,
+            answer
+        });
 
     private static string ExtractResearchQuery(string goal)
     {

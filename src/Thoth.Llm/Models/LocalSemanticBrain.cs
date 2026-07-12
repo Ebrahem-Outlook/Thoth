@@ -420,7 +420,14 @@ internal static class LocalSemanticBrain
             AppendIfAny(builder, "Problems noticed", insights.Failures);
         }
 
-        if (insights.Routes.Count == 0 && insights.Evidence.Count == 0 && insights.Failures.Count == 0)
+        var hasTopicFindings = signal.Topic == "model" ||
+                               signal.Topic == "backend" && insights.Routes.Count > 0 ||
+                               signal.Topic == "frontend" && insights.Files.Count > 0 ||
+                               signal.Topic == "research" && insights.Evidence.Count > 0;
+        if (!hasTopicFindings &&
+            insights.Routes.Count == 0 &&
+            insights.Evidence.Count == 0 &&
+            insights.Failures.Count == 0)
         {
             builder.AppendLine("- I did not get enough useful evidence from this run. The next pass should read more targeted files.");
         }

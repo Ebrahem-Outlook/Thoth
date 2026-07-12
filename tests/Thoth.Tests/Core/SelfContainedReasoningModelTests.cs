@@ -280,4 +280,118 @@ public sealed class SelfContainedReasoningModelTests
         Assert.DoesNotContain("Ø", response.Content);
         Assert.DoesNotContain("Ù", response.Content);
     }
+
+    [Fact]
+    public async Task CompleteAsync_AgentDecisionPromptChoosesMemoryBeforeWorkspaceInspection()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.User, """
+                Return one JSON agent decision only; no markdown and no hidden chain-of-thought.
+                Tool action: {"kind":"tool","rationale":"short observable reason","tool":"name","arguments":{"key":"value"}}
+                Final action: {"kind":"final","rationale":"short reason","answer":"direct final answer"}
+
+                Goal: the model is not thinking, build a real reasoning brain
+                Workspace: C:\repo
+                Dry run: False
+
+                Tools:
+                - memory.search: Searches memory. (query:string required)
+                - workspace.summary: Summarizes workspace. (maxEntries:integer)
+                - workspace.map: Builds workspace map. (maxDepth:integer)
+                - file.read: Reads file. (path:string required)
+
+                Executed observations:
+                - none
+
+                Rules: inspect before editing.
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        using var json = JsonDocument.Parse(response.Content);
+        Assert.Equal("tool", json.RootElement.GetProperty("kind").GetString());
+        Assert.Equal("memory.search", json.RootElement.GetProperty("tool").GetString());
+    }
+
+    [Fact]
+    public async Task CompleteAsync_AgentDecisionPromptReadsReasoningBrainFiles()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.User, """
+                Return one JSON agent decision only; no markdown and no hidden chain-of-thought.
+                Tool action: {"kind":"tool","rationale":"short observable reason","tool":"name","arguments":{"key":"value"}}
+                Final action: {"kind":"final","rationale":"short reason","answer":"direct final answer"}
+
+                Goal: the model is not thinking, build a real reasoning brain
+                Workspace: C:\repo
+                Dry run: False
+
+                Tools:
+                - memory.search: Searches memory. (query:string required)
+                - workspace.summary: Summarizes workspace. (maxEntries:integer)
+                - workspace.map: Builds workspace map. (maxDepth:integer)
+                - file.read: Reads file. (path:string required)
+
+                Executed observations:
+                - Step 1: Recall relevant project memory before choosing local evidence.
+                  Tool: memory.search {"query":"the model is not thinking, build a real reasoning brain","limit":"6"}
+                  Success: True
+                  Observation: no memory
+                - Step 2: Build a workspace-level frame before inspecting files.
+                  Tool: workspace.summary {"maxEntries":"80"}
+                  Success: True
+                  Observation: solution contains Thoth.Llm and Thoth.Core
+                - Step 3: Map the project so the next read is targeted.
+                  Tool: workspace.map {"maxDepth":"5","maxEntries":"280"}
+                  Success: True
+                  Observation: src/Thoth.Llm/Models/SelfContainedReasoningModel.cs
+
+                Rules: inspect before editing.
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        using var json = JsonDocument.Parse(response.Content);
+        Assert.Equal("tool", json.RootElement.GetProperty("kind").GetString());
+        Assert.Equal("file.read", json.RootElement.GetProperty("tool").GetString());
+        Assert.Equal(
+            "src/Thoth.Llm/Models/SelfContainedReasoningModel.cs",
+            json.RootElement.GetProperty("arguments").GetProperty("path").GetString());
+    }
+
+    [Fact]
+    public async Task CompleteAsync_FinalAnswerDoesNotTreatObservedDecisionPromptAsControlPrompt()
+    {
+        var model = new SelfContainedReasoningModel();
+
+        var response = await model.CompleteAsync(new ChatRequest(
+            [
+                new ChatMessage(ChatRole.System, "You are Thoth. Answer from evidence."),
+                new ChatMessage(ChatRole.User, """
+                Goal:
+                inspect the decision service
+
+                Observations:
+                Step 1: Read model decision file.
+                Tool: file.read {"path":"src/Thoth.Core/Agent/ModelAgentDecisionService.cs"}
+                Succeeded: True
+                builder.AppendLine("Return one JSON agent decision only; no markdown and no hidden chain-of-thought.");
+
+                Write a direct final answer.
+                """)
+            ],
+            "thoth-self",
+            0));
+
+        Assert.False(response.Content.TrimStart().StartsWith("{", StringComparison.Ordinal));
+        Assert.Contains("What I understood:", response.Content);
+    }
 }
