@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
@@ -143,6 +144,62 @@ app.MapGet("/api/system/status", async (
         modelDetails.LastEvaluationTimestamp,
         modelDetails.InferenceDevice,
         modelDetails.LastGenerationLatencyMs));
+});
+
+app.MapGet("/api/continuous/status", (IOptions<ThothOptions> options) =>
+{
+    var runsRoot = Path.Combine(options.Value.DataDirectory, "continuous", "runs");
+    if (!Directory.Exists(runsRoot))
+    {
+        return Results.Ok(new
+        {
+            enabled = false,
+            state = "missing",
+            updatedUtc = (DateTimeOffset?)null
+        });
+    }
+
+    var statusPath = Directory.EnumerateFiles(runsRoot, "status.json", SearchOption.AllDirectories)
+        .OrderByDescending(File.GetLastWriteTimeUtc)
+        .FirstOrDefault();
+    if (statusPath is null)
+    {
+        return Results.Ok(new
+        {
+            enabled = false,
+            state = "missing",
+            updatedUtc = (DateTimeOffset?)null
+        });
+    }
+
+    using var document = JsonDocument.Parse(File.ReadAllText(statusPath));
+    var root = document.RootElement;
+    return Results.Ok(new
+    {
+        enabled = true,
+        runId = JsonString(root, "runId"),
+        state = JsonString(root, "state"),
+        updatedUtc = JsonString(root, "updatedUtc"),
+        sourcesEnabled = JsonInt64(root, "sourcesEnabled"),
+        acceptedDocuments = JsonInt64(root, "acceptedDocuments"),
+        rejectedDocuments = JsonInt64(root, "rejectedDocuments"),
+        neuralDocuments = JsonInt64(root, "neuralDocuments"),
+        conceptDocuments = JsonInt64(root, "conceptDocuments"),
+        queuedTokens = JsonInt64(root, "queuedTokens"),
+        consumedTokens = JsonInt64(root, "consumedTokens"),
+        replayTokens = JsonInt64(root, "replayTokens"),
+        newTokens = JsonInt64(root, "newTokens"),
+        step = JsonInt64(root, "step"),
+        tokensPerSecond = JsonDouble(root, "tokensPerSecond"),
+        lastLoss = JsonDouble(root, "lastLoss"),
+        checkpointHash = JsonString(root, "checkpointSha256"),
+        resourceState = JsonString(root, "resourceState"),
+        availableRamBytes = JsonInt64(root, "availableRamBytes"),
+        freeDiskBytes = JsonInt64(root, "freeDiskBytes"),
+        spoolBytes = JsonInt64(root, "spoolBytes"),
+        pendingSegments = JsonInt64(root, "pendingSegments"),
+        stopRequested = JsonBool(root, "stopRequested")
+    });
 });
 
 app.MapGet("/api/model/status", async (
@@ -541,6 +598,20 @@ static string HashDirectory(string path)
     sha.TransformFinalBlock([], 0, 0);
     return Convert.ToHexString(sha.Hash!).ToLowerInvariant();
 }
+
+static string? JsonString(JsonElement root, string property) =>
+    root.TryGetProperty(property, out var value) && value.ValueKind != JsonValueKind.Null
+        ? value.ToString()
+        : null;
+
+static long JsonInt64(JsonElement root, string property) =>
+    root.TryGetProperty(property, out var value) && value.TryGetInt64(out var result) ? result : 0;
+
+static double JsonDouble(JsonElement root, string property) =>
+    root.TryGetProperty(property, out var value) && value.TryGetDouble(out var result) ? result : 0;
+
+static bool JsonBool(JsonElement root, string property) =>
+    root.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.True;
 
 static DateTimeOffset? TryGetLastWriteTime(string? path)
 {

@@ -1,5 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
+    <ProjectReference Include="..\Thoth.Data\Thoth.Data.csproj" />
     <ProjectReference Include="..\Thoth.Model\Thoth.Model.csproj" />
     <ProjectReference Include="..\Thoth.Tokenization\Thoth.Tokenization.csproj" />
   </ItemGroup>

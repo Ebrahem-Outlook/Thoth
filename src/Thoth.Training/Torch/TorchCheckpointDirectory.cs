@@ -47,12 +47,7 @@ public static class TorchCheckpointDirectory
                 JsonSerializer.Serialize(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }),
                 cancellationToken);
 
-            if (Directory.Exists(finalDirectory))
-            {
-                Directory.Delete(finalDirectory, recursive: true);
-            }
-
-            Directory.Move(tempDirectory, finalDirectory);
+            await MoveDirectoryWithRetryAsync(tempDirectory, finalDirectory, cancellationToken);
             return finalDirectory;
         }
         finally
@@ -62,5 +57,40 @@ public static class TorchCheckpointDirectory
                 Directory.Delete(tempDirectory, recursive: true);
             }
         }
+    }
+
+    private static async Task MoveDirectoryWithRetryAsync(
+        string tempDirectory,
+        string finalDirectory,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < 10; attempt++)
+        {
+            try
+            {
+                if (Directory.Exists(finalDirectory))
+                {
+                    Directory.Delete(finalDirectory, recursive: true);
+                }
+
+                Directory.Move(tempDirectory, finalDirectory);
+                return;
+            }
+            catch (IOException) when (attempt < 9)
+            {
+                await Task.Delay(150, cancellationToken);
+            }
+            catch (UnauthorizedAccessException) when (attempt < 9)
+            {
+                await Task.Delay(150, cancellationToken);
+            }
+        }
+
+        if (Directory.Exists(finalDirectory))
+        {
+            Directory.Delete(finalDirectory, recursive: true);
+        }
+
+        Directory.Move(tempDirectory, finalDirectory);
     }
 }

@@ -17,6 +17,7 @@ data/tokenized/
 data/tokenizers/
 data/models/
 data/checkpoints/
+data/continuous/
 data/artifacts/
 data/reports/
 data/downloads/

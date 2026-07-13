@@ -1,0 +1,70 @@
+{
+  "version": 1,
+  "enabledByDefault": false,
+  "repositories": [
+    {
+      "id": "dotnet/runtime",
+      "enabled": false,
+      "url": "https://github.com/dotnet/runtime.git",
+      "licenseIdentifier": "MIT",
+      "refreshMode": "shallow-fetch",
+      "excludedPaths": [ ".git", "bin", "obj", "dist", "build", "node_modules", "third_party", "vendor" ]
+    },
+    {
+      "id": "dotnet/aspnetcore",
+      "enabled": false,
+      "url": "https://github.com/dotnet/aspnetcore.git",
+      "licenseIdentifier": "MIT",
+      "refreshMode": "shallow-fetch",
+      "excludedPaths": [ ".git", "bin", "obj", "dist", "build", "node_modules", "third_party", "vendor" ]
+    },
+    {
+      "id": "dotnet/roslyn",
+      "enabled": false,
+      "url": "https://github.com/dotnet/roslyn.git",
+      "licenseIdentifier": "MIT",
+      "refreshMode": "shallow-fetch",
+      "excludedPaths": [ ".git", "bin", "obj", "dist", "build", "node_modules", "third_party", "vendor" ]
+    },
+    {
+      "id": "microsoft/TypeScript",
+      "enabled": false,
+      "url": "https://github.com/microsoft/TypeScript.git",
+      "licenseIdentifier": "Apache-2.0",
+      "refreshMode": "shallow-fetch",
+      "excludedPaths": [ ".git", "bin", "obj", "dist", "build", "node_modules", "third_party", "vendor" ]
+    },
+    {
+      "id": "angular/angular",
+      "enabled": false,
+      "url": "https://github.com/angular/angular.git",
+      "licenseIdentifier": "MIT",
+      "refreshMode": "shallow-fetch",
+      "excludedPaths": [ ".git", "bin", "obj", "dist", "build", "node_modules", "third_party", "vendor" ]
+    },
+    {
+      "id": "fmtlib/fmt",
+      "enabled": false,
+      "url": "https://github.com/fmtlib/fmt.git",
+      "licenseIdentifier": "MIT",
+      "refreshMode": "shallow-fetch",
+      "excludedPaths": [ ".git", "bin", "obj", "dist", "build", "node_modules", "third_party", "vendor" ]
+    },
+    {
+      "id": "nlohmann/json",
+      "enabled": false,
+      "url": "https://github.com/nlohmann/json.git",
+      "licenseIdentifier": "MIT",
+      "refreshMode": "shallow-fetch",
+      "excludedPaths": [ ".git", "bin", "obj", "dist", "build", "node_modules", "third_party", "vendor" ]
+    },
+    {
+      "id": "google/googletest",
+      "enabled": false,
+      "url": "https://github.com/google/googletest.git",
+      "licenseIdentifier": "BSD-3-Clause",
+      "refreshMode": "shallow-fetch",
+      "excludedPaths": [ ".git", "bin", "obj", "dist", "build", "node_modules", "third_party", "vendor" ]
+    }
+  ]
+}

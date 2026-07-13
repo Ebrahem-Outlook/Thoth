@@ -22,6 +22,7 @@ using Thoth.Model.Persistence;
 using Thoth.Runtime;
 using Thoth.Tokenization;
 using Thoth.Training;
+using Thoth.Training.Continuous;
 using Thoth.Training.Hardware;
 using Thoth.Training.TokenShards;
 using Thoth.Training.Torch;
@@ -58,6 +59,7 @@ public static class CliApp
                 "tokenizer" => await RunTokenizerAsync(host.Services, rest, cancellationToken),
                 "hardware" => RunHardware(host.Services, rest),
                 "data" => await RunDataAsync(host.Services, rest, cancellationToken),
+                "continuous" => await RunContinuousAsync(host.Services, rest, cancellationToken),
                 "tools" => RunTools(host.Services, rest),
                 "memory" => await RunMemoryAsync(host.Services, rest, cancellationToken),
                 "config" => RunConfig(host.Services, rest),
@@ -1131,6 +1133,194 @@ public static class CliApp
                profile.WritableDirectories.All(directory => directory.Writable)
             ? 0
             : 1;
+    }
+
+    private static async Task<int> RunContinuousAsync(
+        IServiceProvider services,
+        string[] args,
+        CancellationToken cancellationToken)
+    {
+        if (args.Length == 0 || IsHelp(args[0]))
+        {
+            Console.WriteLine("""
+            Usage: thoth continuous start|run|status|stop|resume|sources|ingest-once|queue|report [options]
+
+              thoth continuous start --run-id id [--stop-after-tokens n] [--offline] [--rehearsal]
+              thoth continuous status --run-id id [--json]
+              thoth continuous stop --run-id id
+              thoth continuous resume --run-id id
+              thoth continuous sources list
+              thoth continuous ingest-once [--offline]
+              thoth continuous queue
+              thoth continuous report --run-id id
+            """);
+            return 0;
+        }
+
+        var command = args[0].ToLowerInvariant();
+        var parsed = ParsedArguments.Parse(args.Skip(1).ToArray());
+        var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
+        var engine = new ContinuousLearningEngine();
+        await engine.EnsureDefaultConfigAsync(appOptions.WorkspaceRoot, cancellationToken);
+        var options = ToContinuousOptions(appOptions, parsed);
+
+        switch (command)
+        {
+            case "start":
+            case "run":
+            {
+                var report = await engine.RunAsync(options, cancellationToken);
+                WriteContinuousReport(report, parsed.HasFlag("--json"));
+                return 0;
+            }
+            case "resume":
+            {
+                var report = await engine.RunAsync(options, cancellationToken);
+                WriteContinuousReport(report, parsed.HasFlag("--json"));
+                return 0;
+            }
+            case "ingest-once":
+            {
+                var report = await engine.RunOnceAsync(options, cancellationToken);
+                WriteContinuousReport(report, parsed.HasFlag("--json"));
+                return 0;
+            }
+            case "status":
+            {
+                var status = await engine.ReadStatusAsync(options.RunDirectory, cancellationToken);
+                if (parsed.HasFlag("--json"))
+                {
+                    Console.WriteLine(JsonSerializer.Serialize(status, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+                    return 0;
+                }
+
+                WriteContinuousStatus(status);
+                return status.State.Equals("missing", StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            }
+            case "stop":
+            {
+                engine.RequestStop(options.RunDirectory);
+                Console.WriteLine($"Stop requested: {options.RunDirectory}");
+                return 0;
+            }
+            case "sources":
+            {
+                var subcommand = parsed.RemainingText.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? "list";
+                if (!subcommand.Equals("list", StringComparison.OrdinalIgnoreCase))
+                {
+                    Console.Error.WriteLine("Only `thoth continuous sources list` is enabled for safe source changes. Edit config/continuous-learning/sources.json to review licenses.");
+                    return 2;
+                }
+
+                var sources = await engine.LoadSourcesAsync(Path.Combine(appOptions.WorkspaceRoot, options.ConfigPath), cancellationToken);
+                foreach (var source in sources)
+                {
+                    Console.WriteLine($"{(source.Enabled ? "enabled " : "disabled")} {source.Id} [{source.Type}] {source.LicenseIdentifier} -> {source.TrainingRoute}");
+                    Console.WriteLine($"  {source.OfficialLocation}");
+                }
+
+                return 0;
+            }
+            case "queue":
+            {
+                var pending = Path.Combine(options.ContinuousRoot, "token-queue", "pending");
+                var segments = Directory.Exists(pending)
+                    ? Directory.EnumerateFiles(pending, "*.tokens.json", SearchOption.TopDirectoryOnly).ToArray()
+                    : [];
+                Console.WriteLine($"Pending token segments: {segments.Length:n0}");
+                Console.WriteLine($"Pending bytes: {segments.Sum(path => new FileInfo(path).Length):n0}");
+                return 0;
+            }
+            case "report":
+            {
+                var status = await engine.ReadStatusAsync(options.RunDirectory, cancellationToken);
+                var reportPath = Path.Combine(options.RunDirectory, "continuous-report.md");
+                Directory.CreateDirectory(options.RunDirectory);
+                await File.WriteAllTextAsync(
+                    reportPath,
+                    $"""
+                    # Thoth Continuous Learning Report
+
+                    - Run ID: `{status.RunId}`
+                    - State: `{status.State}`
+                    - Accepted/rejected: `{status.AcceptedDocuments}` / `{status.RejectedDocuments}`
+                    - New/replay/consumed tokens: `{status.NewTokens}` / `{status.ReplayTokens}` / `{status.ConsumedTokens}`
+                    - Latest checkpoint: `{status.LatestCheckpoint}`
+                    - Checkpoint SHA-256: `{status.CheckpointSha256}`
+                    - Resource state: `{status.ResourceState}`
+                    - RAM available: `{FormatBytes(status.AvailableRamBytes)}`
+                    - Free disk: `{FormatBytes(status.FreeDiskBytes)}`
+                    """,
+                    cancellationToken);
+                Console.WriteLine(reportPath);
+                return 0;
+            }
+            default:
+                Console.Error.WriteLine("Unknown continuous command. Try: thoth continuous --help");
+                return 2;
+        }
+    }
+
+    private static ContinuousLearningOptions ToContinuousOptions(ThothOptions appOptions, ParsedArguments parsed) =>
+        new()
+        {
+            WorkspaceRoot = appOptions.WorkspaceRoot,
+            DataDirectory = appOptions.DataDirectory,
+            ConfigPath = parsed.GetValue("--config") ?? Path.Combine("config", "continuous-learning", "sources.json"),
+            RunId = parsed.GetValue("--run-id") ?? "continuous-local",
+            TokenizerPath = parsed.GetValue("--tokenizer") ?? Path.Combine(appOptions.DataDirectory, "tokenizers", "local-bpe-8k"),
+            Offline = parsed.HasFlag("--offline"),
+            Rehearsal = parsed.HasFlag("--rehearsal"),
+            MaxCycles = parsed.GetInt("--max-cycles", 0),
+            StopAfterTokens = parsed.GetInt("--stop-after-tokens", 0),
+            StopAfterHours = parsed.GetDouble("--stop-after-hours", 0),
+            MaxCpuPercent = parsed.GetDouble("--max-cpu-percent", 96),
+            RamFloorGb = parsed.GetDouble("--ram-floor-gb", 2),
+            DiskFloorGb = parsed.GetDouble("--disk-floor-gb", 25),
+            SpoolMaxGb = parsed.GetDouble("--spool-max-gb", 1),
+            TrainerThreads = parsed.GetInt("--trainer-threads", Math.Max(1, Environment.ProcessorCount - 2)),
+            IngestWorkers = parsed.GetInt("--ingest-workers", 1),
+            CheckpointEveryTokens = parsed.GetInt("--checkpoint-every-tokens", 16_384),
+            EvaluateEveryTokens = parsed.GetInt("--evaluate-every-tokens", 1_000_000),
+            Context = parsed.GetInt("--context", 64),
+            Layers = parsed.GetInt("--layers", 1),
+            Width = parsed.GetInt("--width", 64),
+            Heads = parsed.GetInt("--heads", 4),
+            Ffn = parsed.GetInt("--ffn", 256),
+            StepsPerCycle = parsed.GetInt("--steps-per-cycle", 1),
+            NoModelGrowth = parsed.HasFlag("--no-model-growth") || !parsed.HasFlag("--allow-model-growth")
+        };
+
+    private static void WriteContinuousReport(ContinuousRunReport report, bool json)
+    {
+        if (json)
+        {
+            Console.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+            return;
+        }
+
+        WriteContinuousStatus(report.Status);
+        Console.WriteLine($"Status: {report.MonitorCommand}");
+        Console.WriteLine($"Stop: {report.StopCommand}");
+        Console.WriteLine($"Resume: {report.ResumeCommand}");
+    }
+
+    private static void WriteContinuousStatus(ContinuousLearningStatus status)
+    {
+        Console.WriteLine($"Run: {status.RunId}");
+        Console.WriteLine($"State: {status.State}");
+        Console.WriteLine($"Source: {status.CurrentSource}");
+        Console.WriteLine($"Accepted/rejected: {status.AcceptedDocuments:n0}/{status.RejectedDocuments:n0}");
+        Console.WriteLine($"Neural/concept docs: {status.NeuralDocuments:n0}/{status.ConceptDocuments:n0}");
+        Console.WriteLine($"Tokens new/replay/consumed: {status.NewTokens:n0}/{status.ReplayTokens:n0}/{status.ConsumedTokens:n0}");
+        Console.WriteLine($"Step: {status.Step:n0}");
+        Console.WriteLine($"Loss: {(status.Step == 0 ? "n/a" : status.LastLoss.ToString("F4"))}");
+        Console.WriteLine($"Tokens/sec: {status.TokensPerSecond:F1}");
+        Console.WriteLine($"Resource: {status.ResourceState}; RAM {FormatBytes(status.AvailableRamBytes)}; disk {FormatBytes(status.FreeDiskBytes)}");
+        Console.WriteLine($"Spool: {FormatBytes(status.SpoolBytes)}; pending segments {status.PendingSegments:n0}");
+        Console.WriteLine($"Checkpoint: {status.LatestCheckpoint}");
+        Console.WriteLine($"Checkpoint SHA-256: {status.CheckpointSha256}");
+        Console.WriteLine($"Message: {status.Message}");
     }
 
     private static async Task<int> RunDataAsync(
