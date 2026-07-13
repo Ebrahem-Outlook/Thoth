@@ -21,6 +21,8 @@ using Thoth.Runtime;
 using Thoth.Tokenization;
 using Thoth.Training;
 using Thoth.Training.Hardware;
+using Thoth.Training.TokenShards;
+using Thoth.Training.Torch;
 
 namespace Thoth.Cli.Commands;
 
@@ -515,13 +517,20 @@ public static class CliApp
               thoth model generate --prompt "text" [existing thoth generate options]
               thoth model evaluate [existing thoth evaluate options]
               thoth model status|qualify [--checkpoint path]
-              thoth model benchmark [--profile smoke-cpu|laptop-pilot] [--steps n] [--sequence n] [--json]
+              thoth model benchmark [--profile smoke-cpu|laptop-pilot|candidate-1|candidate-2] [--steps n] [--train-steps n] [--sequence n] [--json]
+              thoth model learning-proof --data path [--run-dir path] [--steps n] [--context n] [--resume-checkpoint model.bin]
             """);
             return 0;
         }
 
         var subcommand = args[0].ToLowerInvariant();
         var rest = args.Skip(1).ToArray();
+        if (rest.Any(IsHelp))
+        {
+            WriteModelSubcommandHelp(subcommand);
+            return 0;
+        }
+
         return subcommand switch
         {
             "train" => await RunTrainAsync(services, rest, cancellationToken),
@@ -529,6 +538,7 @@ public static class CliApp
             "evaluate" => await RunEvaluateAsync(services, rest, cancellationToken),
             "status" or "inspect" or "qualify" => await RunModelStatusAsync(services, rest, cancellationToken),
             "benchmark" => RunModelBenchmark(rest),
+            "learning-proof" or "proof" => await RunLearningProofAsync(services, rest, cancellationToken),
             _ => UnknownModelCommand(subcommand)
         };
     }
@@ -553,12 +563,16 @@ public static class CliApp
         }
         var sequence = Math.Min(parsed.GetInt("--sequence", Math.Min(64, profile.Config.ContextLength)), profile.Config.ContextLength);
         var steps = parsed.GetInt("--steps", 5);
+        var trainSteps = parsed.GetInt("--train-steps", 0);
         if (steps < 1 || sequence < 2)
         {
             Console.Error.WriteLine("Benchmark requires --steps >= 1 and --sequence >= 2.");
             return 2;
         }
 
+        var process = Process.GetCurrentProcess();
+        var memoryBefore = process.WorkingSet64;
+        var availableBefore = ReadAvailableRamBytes();
         using var model = new TorchTransformerLanguageModel(profile.Config);
         var random = new Random(seed);
         var context = Enumerable.Range(0, sequence)
@@ -573,18 +587,91 @@ public static class CliApp
         }
 
         stopwatch.Stop();
-        var tokens = (long)steps * sequence;
-        var tokensPerSecond = tokens / Math.Max(stopwatch.Elapsed.TotalSeconds, 0.000001);
+        var forwardTokens = (long)steps * sequence;
+        var forwardTokensPerSecond = forwardTokens / Math.Max(stopwatch.Elapsed.TotalSeconds, 0.000001);
+        var peakWorkingSet = Math.Max(memoryBefore, process.WorkingSet64);
+
+        double? trainingTokensPerSecond = null;
+        double? lastTrainingLoss = null;
+        double? trainingStepMs = null;
+        long? checkpointBytes = null;
+        double? saveMs = null;
+        double? loadMs = null;
+        if (trainSteps > 0)
+        {
+            var inputs = new long[1, sequence];
+            var targets = new long[1, sequence];
+            for (var index = 0; index < sequence; index++)
+            {
+                inputs[0, index] = context[index];
+                targets[0, index] = context[(index + 1) % context.Length];
+            }
+
+            stopwatch.Restart();
+            for (var step = 0; step < trainSteps; step++)
+            {
+                lastTrainingLoss = model.TrainBatch(
+                    inputs,
+                    targets,
+                    learningRate: parsed.GetDouble("--lr", 3e-4),
+                    weightDecay: parsed.GetDouble("--weight-decay", 0.01),
+                    gradientClip: parsed.GetDouble("--gradient-clip", 1.0));
+                peakWorkingSet = Math.Max(peakWorkingSet, process.WorkingSet64);
+            }
+
+            stopwatch.Stop();
+            var trainingTokens = (long)trainSteps * sequence;
+            trainingTokensPerSecond = trainingTokens / Math.Max(stopwatch.Elapsed.TotalSeconds, 0.000001);
+            trainingStepMs = stopwatch.Elapsed.TotalMilliseconds / trainSteps;
+
+            var tempDirectory = Path.Combine("data", "runs", "model-benchmark-temp", profile.Name);
+            Directory.CreateDirectory(tempDirectory);
+            var checkpointPath = Path.GetFullPath(Path.Combine(tempDirectory, "model.bin"));
+            stopwatch.Restart();
+            TorchTransformerCheckpoint.SaveAsync(checkpointPath, model).GetAwaiter().GetResult();
+            stopwatch.Stop();
+            saveMs = stopwatch.Elapsed.TotalMilliseconds;
+            checkpointBytes = new FileInfo(checkpointPath).Length;
+
+            stopwatch.Restart();
+            using var loaded = TorchTransformerCheckpoint.LoadAsync(checkpointPath).GetAwaiter().GetResult();
+            stopwatch.Stop();
+            loadMs = stopwatch.Elapsed.TotalMilliseconds;
+            peakWorkingSet = Math.Max(peakWorkingSet, process.WorkingSet64);
+        }
+
+        var effectiveTokensPerSecond = trainingTokensPerSecond ?? forwardTokensPerSecond;
+        static double ProjectHours(long tokens, double tokensPerSecond) =>
+            tokens / Math.Max(tokensPerSecond, 0.000001) / 3600.0;
+
         var result = new
         {
             profile = profile.Name,
             parameters = profile.ParameterCount,
             device = profile.Config.Device,
+            context = profile.Config.ContextLength,
+            width = profile.Config.Width,
+            layers = profile.Config.LayerCount,
+            heads = profile.Config.HeadCount,
+            ffn = profile.Config.FeedForwardSize,
             steps,
             sequence,
-            tokens,
-            elapsedMs = stopwatch.Elapsed.TotalMilliseconds,
-            tokensPerSecond
+            forwardTokens,
+            forwardTokensPerSecond,
+            trainSteps,
+            trainingTokensPerSecond,
+            trainingStepMs,
+            lastTrainingLoss,
+            checkpointBytes,
+            saveMs,
+            loadMs,
+            workingSetBytesBefore = memoryBefore,
+            peakWorkingSetBytes = peakWorkingSet,
+            availableRamBytesBefore = availableBefore,
+            availableRamBytesAfter = ReadAvailableRamBytes(),
+            projectedHours10M = ProjectHours(10_000_000, effectiveTokensPerSecond),
+            projectedHours30M = ProjectHours(30_000_000, effectiveTokensPerSecond),
+            projectedHours60M = ProjectHours(60_000_000, effectiveTokensPerSecond)
         };
 
         if (parsed.HasFlag("--json"))
@@ -596,9 +683,15 @@ public static class CliApp
             Console.WriteLine($"Profile: {result.profile}");
             Console.WriteLine($"Parameters: {result.parameters:n0}");
             Console.WriteLine($"Device: {result.device}");
-            Console.WriteLine($"Tokens: {result.tokens:n0}");
-            Console.WriteLine($"Elapsed: {result.elapsedMs:F1} ms");
-            Console.WriteLine($"Throughput: {result.tokensPerSecond:F1} tokens/sec");
+            Console.WriteLine($"Forward tokens: {result.forwardTokens:n0}");
+            Console.WriteLine($"Forward throughput: {result.forwardTokensPerSecond:F1} tokens/sec");
+            if (result.trainingTokensPerSecond is not null)
+            {
+                Console.WriteLine($"Training throughput: {result.trainingTokensPerSecond:F1} tokens/sec");
+                Console.WriteLine($"Training step: {result.trainingStepMs:F1} ms");
+                Console.WriteLine($"Last training loss: {result.lastTrainingLoss:F4}");
+                Console.WriteLine($"Checkpoint: {result.checkpointBytes:n0} bytes");
+            }
         }
 
         return 0;
@@ -609,14 +702,241 @@ public static class CliApp
         {
             "smoke" or "smoke-cpu" => TorchTransformerProfiles.SmokeCpu(vocabularySize, seed),
             "pilot" or "laptop-pilot" => TorchTransformerProfiles.LaptopPilot(vocabularySize, seed),
+            "candidate-1" or "candidate1" or "throughput" => CreateTorchProfile(
+                "candidate-1-throughput",
+                new TorchTransformerConfig(vocabularySize, 256, 4, 256, 8, 1024, 0, seed, PaddingToken: 0, Device: "cpu", TieOutputEmbeddings: true)),
+            "candidate-2" or "candidate2" or "capacity" => CreateTorchProfile(
+                "candidate-2-capacity",
+                new TorchTransformerConfig(vocabularySize, 256, 6, 320, 8, 1280, 0, seed, PaddingToken: 0, Device: "cpu", TieOutputEmbeddings: true)),
             _ => throw new ArgumentOutOfRangeException(nameof(profileName), $"Unknown model benchmark profile: {profileName}")
         };
+
+    private static TorchTransformerProfile CreateTorchProfile(string name, TorchTransformerConfig config) =>
+        new(name, config, TorchTransformerProfiles.CountParameters(config));
+
+    private static async Task<int> RunLearningProofAsync(
+        IServiceProvider services,
+        string[] args,
+        CancellationToken cancellationToken)
+    {
+        var parsed = ParsedArguments.Parse(args);
+        var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
+        var tokenizer = services.GetRequiredService<ITextTokenizer>();
+        var dataPath = parsed.GetValue("--data") ??
+                       Path.Combine(appOptions.DataDirectory, "splits", "instruction", "train", "phase3-owned-smoke.jsonl");
+        var runId = parsed.GetValue("--run-id") ?? $"learning-proof-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}";
+        var runDirectory = Path.GetFullPath(parsed.GetValue("--run-dir") ?? Path.Combine(appOptions.DataDirectory, "runs", runId));
+        Directory.CreateDirectory(runDirectory);
+
+        var corpus = await CorpusLoader.LoadCorpusAsync(dataPath, tokenizer, cancellationToken: cancellationToken);
+        var maxCorpusTokens = parsed.GetInt("--max-corpus-tokens", 250_000);
+        var tokens = corpus.Tokens.Take(maxCorpusTokens).ToArray();
+        var context = parsed.GetInt("--context", 128);
+        if (tokens.Length <= context + 1)
+        {
+            Console.Error.WriteLine($"Learning proof needs more than {context + 1:n0} tokens.");
+            return 2;
+        }
+
+        var config = new TorchTransformerConfig(
+            tokenizer.VocabularySize,
+            context,
+            parsed.GetInt("--layers", 2),
+            parsed.GetInt("--width", 128),
+            parsed.GetInt("--heads", 4),
+            parsed.GetInt("--ffn", parsed.GetInt("--width", 128) * 4),
+            Dropout: 0,
+            Seed: parsed.GetInt("--seed", appOptions.Model.Seed),
+            PaddingToken: tokenizer.PaddingTokenId,
+            Device: "cpu",
+            TieOutputEmbeddings: true);
+        var resumeCheckpoint = parsed.GetValue("--resume-checkpoint");
+        using var model = string.IsNullOrWhiteSpace(resumeCheckpoint)
+            ? new TorchTransformerLanguageModel(config)
+            : await TorchTransformerCheckpoint.LoadAsync(Path.GetFullPath(resumeCheckpoint), cancellationToken);
+        config = model.Config;
+        var totalSteps = parsed.GetInt("--steps", 20);
+        var firstSteps = Math.Max(1, totalSteps / 2);
+        var remainingSteps = Math.Max(1, totalSteps - firstSteps);
+        var accumulation = parsed.GetInt("--grad-accum", 1);
+        var windows = CreateTokenWindows(tokens, context, (firstSteps + remainingSteps) * accumulation + 8).ToArray();
+
+        var firstOptions = CreateTorchOptions(parsed, runId, firstSteps, accumulation);
+        var firstReport = await new TorchTransformerTrainer(model)
+            .TrainAsync(windows, firstOptions, runDirectory, cancellationToken);
+        var checkpoint = FindLatestTorchCheckpoint(runDirectory);
+        if (checkpoint is null)
+        {
+            Console.Error.WriteLine("Learning proof did not produce a checkpoint.");
+            return 1;
+        }
+
+        using var resumed = await TorchTransformerCheckpoint.LoadAsync(Path.Combine(checkpoint, "model.bin"), cancellationToken);
+        var resumeStartedAt = resumed.OptimizerStep;
+        var secondOptions = CreateTorchOptions(parsed, runId, remainingSteps, accumulation);
+        var secondReport = await new TorchTransformerTrainer(resumed)
+            .TrainAsync(windows.Skip(firstReport.MicroSteps), secondOptions, runDirectory, cancellationToken);
+        var latestCheckpoint = FindLatestTorchCheckpoint(runDirectory);
+        var sample = await new TorchTransformerTextGenerator(resumed, tokenizer)
+            .GenerateAsync(
+                "User: can you build C# calculator method?\nAssistant:",
+                new GenerationOptions
+                {
+                    MaxNewTokens = parsed.GetInt("--sample-tokens", 80),
+                    Temperature = parsed.GetDouble("--sample-temperature", 0.9),
+                    TopK = parsed.GetInt("--sample-top-k", 40),
+                    TopP = parsed.GetDouble("--sample-top-p", 0.95),
+                    RepetitionPenalty = 1.1,
+                    Seed = parsed.GetInt("--sample-seed", 7)
+                },
+                cancellationToken: cancellationToken);
+        if (string.IsNullOrWhiteSpace(sample))
+        {
+            sample = "<empty>";
+        }
+
+        var proof = new
+        {
+            runId,
+            runDirectory,
+            dataPath = Path.GetFullPath(dataPath),
+            corpusTokens = tokens.Length,
+            config,
+            resumeCheckpoint,
+            parameterCount = TorchTransformerProfiles.CountParameters(config),
+            first = firstReport,
+            resumeStartedAt,
+            second = secondReport,
+            latestCheckpoint,
+            lossDelta = firstReport.InitialLoss - secondReport.FinalLoss,
+            sample
+        };
+        var reportPath = Path.Combine(runDirectory, "learning-proof.json");
+        await File.WriteAllTextAsync(
+            reportPath,
+            JsonSerializer.Serialize(proof, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }),
+            cancellationToken);
+
+        Console.WriteLine($"Run: {runId}");
+        Console.WriteLine($"Run directory: {runDirectory}");
+        Console.WriteLine($"Parameters: {proof.parameterCount:n0}");
+        Console.WriteLine($"Tokens: {tokens.Length:n0}");
+        Console.WriteLine($"Steps: {firstReport.StartingStep:n0}->{secondReport.CompletedStep:n0}");
+        Console.WriteLine($"Loss: {firstReport.InitialLoss:F4}->{secondReport.FinalLoss:F4}");
+        Console.WriteLine($"Resume started at step: {resumeStartedAt:n0}");
+        Console.WriteLine($"Tokens/sec: {secondReport.TokensPerSecond:F1}");
+        Console.WriteLine($"Latest checkpoint: {latestCheckpoint}");
+        Console.WriteLine($"Report: {reportPath}");
+        Console.WriteLine("Sample:");
+        Console.WriteLine(sample);
+        return 0;
+    }
+
+    private static TorchTrainingOptions CreateTorchOptions(
+        ParsedArguments parsed,
+        string runId,
+        int steps,
+        int accumulation) =>
+        new()
+        {
+            RunId = runId,
+            MaxOptimizerSteps = steps,
+            GradientAccumulationSteps = accumulation,
+            LearningRate = parsed.GetDouble("--lr", 3e-4),
+            MinimumLearningRate = parsed.GetDouble("--min-lr", 3e-5),
+            WarmupSteps = parsed.GetInt("--warmup", Math.Min(10, steps)),
+            WeightDecay = parsed.GetDouble("--weight-decay", 0.01),
+            GradientClip = parsed.GetDouble("--gradient-clip", 1.0),
+            CheckpointEverySteps = parsed.GetInt("--checkpoint-every", Math.Max(1, steps / 2)),
+            Seed = parsed.GetInt("--seed", 1337)
+        };
+
+    private static IEnumerable<TokenWindow> CreateTokenWindows(
+        IReadOnlyList<int> tokens,
+        int context,
+        int maximumWindows)
+    {
+        for (var offset = 0; offset + context < tokens.Count && offset / context < maximumWindows; offset += context)
+        {
+            var inputs = new int[context];
+            var targets = new int[context];
+            for (var index = 0; index < context; index++)
+            {
+                inputs[index] = tokens[offset + index];
+                targets[index] = tokens[offset + index + 1];
+            }
+
+            yield return new TokenWindow(
+                inputs,
+                targets,
+                Enumerable.Repeat(true, context).ToArray(),
+                "learning-proof-corpus",
+                offset);
+        }
+    }
+
+    private static string? FindLatestTorchCheckpoint(string runDirectory)
+    {
+        var checkpointRoot = Path.Combine(Path.GetFullPath(runDirectory), "checkpoints");
+        if (!Directory.Exists(checkpointRoot))
+        {
+            return null;
+        }
+
+        return Directory.EnumerateDirectories(checkpointRoot, "step-*", SearchOption.TopDirectoryOnly)
+            .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+            .LastOrDefault();
+    }
+
+    private static long? ReadAvailableRamBytes()
+    {
+        var profile = LocalHardwareProbe.Inspect(new Dictionary<string, string>());
+        return profile.AvailableRamBytes;
+    }
 
     private static int UnknownModelCommand(string command)
     {
         Console.Error.WriteLine($"Unknown model command: {command}");
         Console.Error.WriteLine("Try: thoth model train|generate|evaluate|status|qualify|benchmark");
         return 2;
+    }
+
+    private static void WriteModelSubcommandHelp(string subcommand)
+    {
+        var text = subcommand switch
+        {
+            "train" => """
+                Usage:
+                  thoth model train --data path [--checkpoint path] [--epochs n] [--steps-per-epoch n]
+                                    [--sequence n] [--embedding n] [--hidden n] [--lr value] [--fresh]
+                  thoth model train --architecture transformer --tokenizer path --data path
+                                    [--checkpoint path] [--preset tiny|bootstrap]
+                                    [--layers n] [--width n] [--heads n] [--ffn n] [--batch-size n]
+                """,
+            "generate" => """
+                Usage:
+                  thoth model generate --prompt "text" [--architecture transformer] [--tokenizer path]
+                                       [--checkpoint path] [--tokens n] [--temperature value]
+                                       [--top-k n] [--top-p value] [--seed n] [--experimental]
+                """,
+            "evaluate" => """
+                Usage:
+                  thoth model evaluate [--architecture transformer] [--tokenizer path] [--data path]
+                                       [--checkpoint path] [--sequence n] [--max-sequences n] [--report path]
+                """,
+            "benchmark" => """
+                Usage:
+                  thoth model benchmark [--profile smoke-cpu|laptop-pilot|candidate-1|candidate-2] [--vocab-size n]
+                                        [--steps n] [--train-steps n] [--sequence n] [--seed n] [--json]
+                """,
+            "status" or "inspect" or "qualify" => """
+                Usage:
+                  thoth model status [--checkpoint path]
+                  thoth model qualify [--checkpoint path]
+                """,
+            _ => "Try: thoth model train|generate|evaluate|status|qualify|benchmark"
+        };
+        Console.WriteLine(text);
     }
 
     private static int RunTools(IServiceProvider services, string[] args)

@@ -20,6 +20,7 @@ data/checkpoints/
 data/artifacts/
 data/reports/
 data/downloads/
+data/uploads/
 data/training/logs/
 *.checkpoint
 *.ckpt
