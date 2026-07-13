@@ -420,7 +420,7 @@ public sealed class ContinuousLearningEngine
 
         if (mixedTokens.Count > options.Context + 1)
         {
-            (model, var trainStatus) = await TrainCycleAsync(options, tokenizer, model, mixedTokens, runState, cancellationToken);
+            (model, var trainStatus) = await TrainCycleAsync(options, tokenizer, model, mixedTokens, runState, enabled.Length, cancellationToken);
             status = trainStatus;
         }
         else
@@ -622,6 +622,7 @@ public sealed class ContinuousLearningEngine
         TorchTransformerLanguageModel? model,
         IReadOnlyList<int> tokens,
         ContinuousCounters counters,
+        int enabledSources,
         CancellationToken cancellationToken)
     {
         model ??= await LoadOrCreateModelAsync(options, tokenizer, cancellationToken);
@@ -643,7 +644,7 @@ public sealed class ContinuousLearningEngine
         var checkpoint = FindLatestCheckpoint(trainingDirectory);
         var checkpointHash = checkpoint is null ? "" : await Sha256FileAsync(Path.Combine(checkpoint, "model.bin"), cancellationToken);
         var resources = ContinuousResourceSnapshot.Capture(options);
-        var status = BaseStatus(options, resources, 0, "running", counters) with
+        var status = BaseStatus(options, resources, enabledSources, "running", counters) with
         {
             Step = report.CompletedStep,
             TokensPerSecond = report.TokensPerSecond,
