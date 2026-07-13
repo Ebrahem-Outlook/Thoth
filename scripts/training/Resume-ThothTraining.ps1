@@ -31,4 +31,8 @@ Write-Host "Relaunching from latest checkpoint with the same config."
     -Width $run.width `
     -Heads $run.heads `
     -Ffn $run.ffn `
+    -TokenizerPath $run.tokenizerPath `
+    -MaxCorpusTokens $run.maxCorpusTokens `
+    -GradAccum $run.gradAccum `
+    -CheckpointEvery $run.checkpointEvery `
     -ResumeCheckpoint (Join-Path $latestCheckpoint.FullName "model.bin")

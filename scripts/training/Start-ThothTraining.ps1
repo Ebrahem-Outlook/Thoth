@@ -7,6 +7,10 @@ param(
     [int]$Width = 128,
     [int]$Heads = 4,
     [int]$Ffn = 512,
+    [string]$TokenizerPath = "",
+    [int]$MaxCorpusTokens = 10000000,
+    [int]$GradAccum = 1,
+    [int]$CheckpointEvery = 1000,
     [string]$ResumeCheckpoint = ""
 )
 
@@ -46,8 +50,14 @@ $argsList = @(
     "--layers", "$Layers",
     "--width", "$Width",
     "--heads", "$Heads",
-    "--ffn", "$Ffn"
+    "--ffn", "$Ffn",
+    "--max-corpus-tokens", "$MaxCorpusTokens",
+    "--grad-accum", "$GradAccum",
+    "--checkpoint-every", "$CheckpointEvery"
 )
+if ($TokenizerPath) {
+    $argsList += @("--tokenizer", $TokenizerPath)
+}
 if ($ResumeCheckpoint) {
     $argsList += @("--resume-checkpoint", $ResumeCheckpoint)
 }
@@ -66,6 +76,10 @@ $metadata = [ordered]@{
     width = $Width
     heads = $Heads
     ffn = $Ffn
+    tokenizerPath = $TokenizerPath
+    maxCorpusTokens = $MaxCorpusTokens
+    gradAccum = $GradAccum
+    checkpointEvery = $CheckpointEvery
     resumeCheckpoint = $ResumeCheckpoint
     freeDiskBytesAtStart = [int64]$freeDisk
 }
@@ -75,10 +89,13 @@ $metadata | ConvertTo-Json -Depth 8 | Set-Content -Path $statePath -Encoding UTF
 $process = Start-Process -FilePath "dotnet" -ArgumentList $argsList -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru -WindowStyle Hidden
 Set-Content -Path $lockPath -Encoding UTF8 -Value $process.Id
 
-$state = $metadata.Clone()
-$state.status = "running"
-$state.trainingPid = $process.Id
-$state.lastUpdateUtc = (Get-Date).ToUniversalTime().ToString("o")
+$state = [ordered]@{}
+foreach ($key in $metadata.Keys) {
+    $state[$key] = $metadata[$key]
+}
+$state["status"] = "running"
+$state["trainingPid"] = $process.Id
+$state["lastUpdateUtc"] = (Get-Date).ToUniversalTime().ToString("o")
 $state | ConvertTo-Json -Depth 8 | Set-Content -Path $statePath -Encoding UTF8
 
 $supervisorArgs = @(

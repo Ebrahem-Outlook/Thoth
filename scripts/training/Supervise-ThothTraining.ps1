@@ -44,7 +44,8 @@ do {
         }
     }
 
-    $state | Add-Member -Force NoteProperty status ($(if (Test-Path $stopPath) { "stopping" } elseif ($alive) { "running" } else { "exited" }))
+    $status = if ((Test-Path $stopPath) -and -not $alive) { "stopped" } elseif (Test-Path $stopPath) { "stopping" } elseif ($alive) { "running" } else { "exited" }
+    $state | Add-Member -Force NoteProperty status $status
     $state | Add-Member -Force NoteProperty trainingPid $pidValue
     $state | Add-Member -Force NoteProperty processAlive $alive
     $state | Add-Member -Force NoteProperty lastUpdateUtc ((Get-Date).ToUniversalTime().ToString("o"))
@@ -71,6 +72,10 @@ do {
     }
 
     Write-State $state
-    if ($Once) { break }
+    if (-not $alive -and $pidValue -and (Test-Path $lockPath)) {
+        Remove-Item -LiteralPath $lockPath -Force -ErrorAction SilentlyContinue
+    }
+
+    if ($Once -or (-not $alive -and $pidValue)) { break }
     Start-Sleep -Seconds $PollSeconds
 } while ($true)

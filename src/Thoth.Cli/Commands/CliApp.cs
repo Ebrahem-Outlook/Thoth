@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Diagnostics;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -12,6 +13,7 @@ using Thoth.Core.Memory;
 using Thoth.Core.Tools;
 using Thoth.Data.Acquisition;
 using Thoth.Data.Manifests;
+using Thoth.Data.Processing;
 using Thoth.Data.Synthetic;
 using Thoth.Evaluation;
 using Thoth.Inference;
@@ -151,11 +153,16 @@ public static class CliApp
     {
         if (args.Length == 0 || IsHelp(args[0]))
         {
-            Console.WriteLine("Usage: thoth tokenizer train --data path --output data/tokenizers/thoth-bpe [--vocab-size 8000]");
+            Console.WriteLine("Usage: thoth tokenizer train|compare --data path --output data/tokenizers/thoth-bpe [--vocab-size 8000]");
             return 0;
         }
 
         var command = args[0].ToLowerInvariant();
+        if (command == "compare")
+        {
+            return await RunTokenizerCompareAsync(args.Skip(1).ToArray(), cancellationToken);
+        }
+
         if (command != "train")
         {
             Console.Error.WriteLine("Unknown tokenizer command. Try: thoth tokenizer train --data path --output path");
@@ -185,6 +192,84 @@ public static class CliApp
         Console.WriteLine($"Vocabulary: {tokenizer.VocabularySize:n0}");
         Console.WriteLine($"Merges: {tokenizer.Merges.Count:n0}");
         Console.WriteLine($"Training manifest: {tokenizer.TrainingManifestSha256}");
+        return 0;
+    }
+
+    private static async Task<int> RunTokenizerCompareAsync(
+        string[] args,
+        CancellationToken cancellationToken)
+    {
+        var parsed = ParsedArguments.Parse(args);
+        var bpe6Path = parsed.GetValue("--bpe6") ?? parsed.GetValue("--bpe-6k");
+        var bpe8Path = parsed.GetValue("--bpe8") ?? parsed.GetValue("--bpe-8k") ?? parsed.GetValue("--tokenizer");
+        if (string.IsNullOrWhiteSpace(bpe6Path) || string.IsNullOrWhiteSpace(bpe8Path))
+        {
+            Console.Error.WriteLine("Usage: thoth tokenizer compare --bpe6 path --bpe8 path [--json]");
+            return 2;
+        }
+
+        var tokenizers = new (string Name, ITextTokenizer Tokenizer)[]
+        {
+            ("byte", new ByteTokenizer()),
+            ("bpe-6k", await BpeTokenizer.LoadAsync(bpe6Path, cancellationToken)),
+            ("bpe-8k", await BpeTokenizer.LoadAsync(bpe8Path, cancellationToken))
+        };
+        var samples = new (string Name, string Text)[]
+        {
+            ("arabic", "\u0627\u0639\u0645\u0644 method \u0628\u0644\u063a\u0629 C# \u062a\u062f\u0639\u0645 \u0642\u0633\u0645\u0629 \u0648\u0642\u0633\u0645\u0647 \u0648\u0642\u0645\u0633\u0647 \u0645\u0639 \u062a\u062d\u0642\u0642 division by zero."),
+            ("english", "Build a calculator method that handles add, subtract, multiply, divide, validates bad operators, and explains edge cases clearly."),
+            ("csharp", "public static decimal Calculate(decimal a, decimal b, string op) => op switch { \"+\" => a + b, \"-\" => a - b, \"*\" => a * b, \"/\" when b != 0 => a / b, \"/\" => throw new DivideByZeroException(), _ => throw new ArgumentOutOfRangeException(nameof(op)) };"),
+            ("typescript", "export function calculate(a: number, b: number, op: string): number { if (op === '/' && b === 0) throw new Error('division by zero'); return op === '+' ? a + b : op === '-' ? a - b : op === '*' ? a * b : op === '/' ? a / b : (() => { throw new Error('unknown operator'); })(); }"),
+            ("cpp", "double calculate(double a, double b, const std::string& op) { if (op == \"/\" && b == 0.0) throw std::invalid_argument(\"division by zero\"); if (op == \"+\") return a + b; if (op == \"-\") return a - b; if (op == \"*\") return a * b; if (op == \"/\") return a / b; throw std::invalid_argument(\"unknown operator\"); }")
+        };
+
+        var results = new List<object>();
+        foreach (var (sampleName, text) in samples)
+        {
+            foreach (var (tokenizerName, tokenizer) in tokenizers)
+            {
+                var started = Stopwatch.GetTimestamp();
+                var tokens = tokenizer.Encode(text);
+                var elapsed = Stopwatch.GetElapsedTime(started);
+                var decoded = tokenizer.Decode(tokens);
+                results.Add(new
+                {
+                    sample = sampleName,
+                    tokenizer = tokenizerName,
+                    vocabulary = tokenizer.VocabularySize,
+                    characters = text.Length,
+                    tokens = tokens.Count,
+                    charsPerToken = tokens.Count == 0 ? 0 : Math.Round((double)text.Length / tokens.Count, 3),
+                    encodeMicroseconds = Math.Round(elapsed.TotalMicroseconds, 3),
+                    roundTrip = decoded == text
+                });
+            }
+        }
+
+        var summary = results
+            .GroupBy(item => (string)item.GetType().GetProperty("tokenizer")!.GetValue(item)!)
+            .ToDictionary(
+                group => group.Key,
+                group => new
+                {
+                    totalTokens = group.Sum(item => (int)item.GetType().GetProperty("tokens")!.GetValue(item)!),
+                    allRoundTrip = group.All(item => (bool)item.GetType().GetProperty("roundTrip")!.GetValue(item)!)
+                },
+                StringComparer.OrdinalIgnoreCase);
+        var report = new { generatedUtc = DateTimeOffset.UtcNow, bpe6Path = Path.GetFullPath(bpe6Path), bpe8Path = Path.GetFullPath(bpe8Path), summary, results };
+
+        if (parsed.HasFlag("--json"))
+        {
+            Console.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+            return 0;
+        }
+
+        foreach (var item in results)
+        {
+            var type = item.GetType();
+            Console.WriteLine($"{type.GetProperty("sample")!.GetValue(item)} {type.GetProperty("tokenizer")!.GetValue(item)}: {type.GetProperty("tokens")!.GetValue(item)} tokens, roundTrip={type.GetProperty("roundTrip")!.GetValue(item)}");
+        }
+
         return 0;
     }
 
@@ -721,7 +806,7 @@ public static class CliApp
     {
         var parsed = ParsedArguments.Parse(args);
         var appOptions = services.GetRequiredService<IOptions<ThothOptions>>().Value;
-        var tokenizer = services.GetRequiredService<ITextTokenizer>();
+        var (tokenizer, tokenizerName) = await ResolveTokenizerAsync(appOptions, parsed, cancellationToken);
         var dataPath = parsed.GetValue("--data") ??
                        Path.Combine(appOptions.DataDirectory, "splits", "instruction", "train", "phase3-owned-smoke.jsonl");
         var runId = parsed.GetValue("--run-id") ?? $"learning-proof-{DateTimeOffset.UtcNow:yyyyMMdd-HHmmss}";
@@ -800,6 +885,8 @@ public static class CliApp
             runId,
             runDirectory,
             dataPath = Path.GetFullPath(dataPath),
+            tokenizer = tokenizerName,
+            vocabularySize = tokenizer.VocabularySize,
             corpusTokens = tokens.Length,
             config,
             resumeCheckpoint,
@@ -819,6 +906,7 @@ public static class CliApp
 
         Console.WriteLine($"Run: {runId}");
         Console.WriteLine($"Run directory: {runDirectory}");
+        Console.WriteLine($"Tokenizer: {tokenizerName} ({tokenizer.VocabularySize:n0})");
         Console.WriteLine($"Parameters: {proof.parameterCount:n0}");
         Console.WriteLine($"Tokens: {tokens.Length:n0}");
         Console.WriteLine($"Steps: {firstReport.StartingStep:n0}->{secondReport.CompletedStep:n0}");
@@ -856,8 +944,15 @@ public static class CliApp
         int context,
         int maximumWindows)
     {
-        for (var offset = 0; offset + context < tokens.Count && offset / context < maximumWindows; offset += context)
+        var usableSpan = tokens.Count - context - 1;
+        if (usableSpan <= 0 || maximumWindows <= 0)
         {
+            yield break;
+        }
+
+        for (var window = 0; window < maximumWindows; window++)
+        {
+            var offset = (window * context) % usableSpan;
             var inputs = new int[context];
             var targets = new int[context];
             for (var index = 0; index < context; index++)
@@ -1045,7 +1140,7 @@ public static class CliApp
     {
         if (args.Length == 0 || IsHelp(args[0]))
         {
-            Console.WriteLine("Usage: thoth data init-manifests|list-sources|plan-source|generate-owned");
+            Console.WriteLine("Usage: thoth data init-manifests|list-sources|plan-source|generate-owned|build-local-corpus|token-count");
             return 0;
         }
 
@@ -1123,9 +1218,413 @@ public static class CliApp
             return 0;
         }
 
+        if (command == "build-local-corpus")
+        {
+            return await RunBuildLocalCorpusAsync(appOptions, parsed, cancellationToken);
+        }
+
+        if (command == "token-count")
+        {
+            return await RunDataTokenCountAsync(appOptions, parsed, cancellationToken);
+        }
+
         Console.Error.WriteLine("Unknown data command. Try: thoth data init-manifests");
         return 2;
     }
+
+    private static async Task<int> RunDataTokenCountAsync(
+        ThothOptions appOptions,
+        ParsedArguments parsed,
+        CancellationToken cancellationToken)
+    {
+        var dataPath = parsed.GetValue("--data") ??
+                       (!string.IsNullOrWhiteSpace(parsed.RemainingText)
+                           ? parsed.RemainingText
+                           : Path.Combine(appOptions.DataDirectory, "splits", "local-corpus-v1", "train"));
+        var (tokenizer, tokenizerName) = await ResolveTokenizerAsync(appOptions, parsed, cancellationToken);
+        var corpus = await CorpusLoader.LoadCorpusAsync(dataPath, tokenizer, cancellationToken: cancellationToken);
+        var report = new
+        {
+            dataPath = Path.GetFullPath(dataPath),
+            tokenizer = tokenizerName,
+            vocabulary = tokenizer.VocabularySize,
+            tokenCount = corpus.Tokens.Length,
+            fileCount = corpus.Manifest.FileCount,
+            totalBytes = corpus.Manifest.TotalBytes,
+            totalCharacters = corpus.Manifest.TotalCharacters,
+            partitions = corpus.Manifest.Files
+                .GroupBy(file => file.Partition)
+                .ToDictionary(
+                    group => group.Key,
+                    group => new
+                    {
+                        files = group.Count(),
+                        bytes = group.Sum(file => file.ByteLength),
+                        characters = group.Sum(file => file.CharacterCount)
+                    },
+                    StringComparer.OrdinalIgnoreCase)
+        };
+
+        if (parsed.HasFlag("--json"))
+        {
+            Console.WriteLine(JsonSerializer.Serialize(report, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }));
+            return 0;
+        }
+
+        Console.WriteLine($"Data: {report.dataPath}");
+        Console.WriteLine($"Tokenizer: {report.tokenizer} ({report.vocabulary:n0})");
+        Console.WriteLine($"Tokens: {report.tokenCount:n0}");
+        Console.WriteLine($"Files: {report.fileCount:n0}");
+        return 0;
+    }
+
+    private static async Task<int> RunBuildLocalCorpusAsync(
+        ThothOptions appOptions,
+        ParsedArguments parsed,
+        CancellationToken cancellationToken)
+    {
+        var output = Path.GetFullPath(parsed.GetValue("--output") ??
+                                      Path.Combine(appOptions.DataDirectory, "splits", "local-corpus-v1"));
+        var targetTokens = parsed.GetInt("--target-tokens", 2_000_000);
+        var seed = parsed.GetInt("--seed", 20260713);
+        var workspaceRoot = Path.GetFullPath(parsed.GetValue("--workspace") ?? appOptions.WorkspaceRoot);
+        var tokenizer = new ByteTokenizer();
+        var normalizer = new TextNormalizer(new TextNormalizationOptions(NormalizeToNfc: true));
+        var quality = new DocumentQualityAnalyzer();
+        var deduper = new DocumentDeduplicator();
+        var split = new StableSplitAssigner(seed: seed);
+        var documents = new List<LocalCorpusDocument>();
+        var rejections = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+
+        Directory.CreateDirectory(output);
+        foreach (var partition in new[] { "train", "validation", "test" })
+        {
+            var partitionPath = Path.Combine(output, partition);
+            Directory.CreateDirectory(partitionPath);
+            foreach (var staleFile in Directory.EnumerateFiles(partitionPath, "*.txt", SearchOption.TopDirectoryOnly))
+            {
+                File.Delete(staleFile);
+            }
+        }
+
+        foreach (var file in EnumerateLocalCorpusFiles(workspaceRoot))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string text;
+            try
+            {
+                text = await File.ReadAllTextAsync(file, cancellationToken);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or DecoderFallbackException)
+            {
+                Increment(rejections, "read_failed");
+                continue;
+            }
+
+            AcceptDocument(
+                documents,
+                rejections,
+                normalizer,
+                quality,
+                deduper,
+                split,
+                tokenizer,
+                new PendingCorpusDocument(
+                    "repo-local",
+                    "User-provided local Thoth repository",
+                    "User-supplied-local",
+                    Path.GetRelativePath(workspaceRoot, file).Replace('\\', '/'),
+                    Path.GetExtension(file).TrimStart('.').ToLowerInvariant(),
+                    text));
+        }
+
+        var currentTokens = documents.Sum(document => document.TokenCount);
+        var syntheticIndex = 0;
+        while (currentTokens < targetTokens)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var text = BuildOwnedCurriculumDocument(syntheticIndex, seed);
+            var accepted = AcceptDocument(
+                documents,
+                rejections,
+                normalizer,
+                quality,
+                deduper,
+                split,
+                tokenizer,
+                new PendingCorpusDocument(
+                    "owned-synthetic",
+                    "Owned deterministic local curriculum",
+                    "Thoth-owned",
+                    $"owned-curriculum-{seed}-{syntheticIndex:000000}",
+                    "instruction-code-dialogue",
+                    text),
+                fastSynthetic: true);
+            if (accepted)
+            {
+                currentTokens += documents[^1].TokenCount;
+            }
+
+            syntheticIndex++;
+            if (syntheticIndex > targetTokens / 100)
+            {
+                throw new InvalidOperationException("Synthetic corpus generation did not reach the requested token target.");
+            }
+        }
+
+        EnsureSplitCoverage(documents);
+
+        var sequence = 0;
+        foreach (var document in documents)
+        {
+            var fileName = $"{sequence:000000}-{SanitizeFileName(document.Id)}.txt";
+            var path = Path.Combine(output, document.Split, fileName);
+            var header = string.Join(
+                Environment.NewLine,
+                $"source_id: {document.SourceId}",
+                $"source_name: {document.SourceName}",
+                $"license: {document.License}",
+                $"document_id: {document.Id}",
+                $"category: {document.Category}",
+                $"tokens: {document.TokenCount}",
+                "---",
+                "");
+            await File.WriteAllTextAsync(path, header + document.Text, cancellationToken);
+            sequence++;
+        }
+
+        var manifest = new
+        {
+            createdUtc = DateTimeOffset.UtcNow,
+            output,
+            targetTokens,
+            seed,
+            tokenizer = "byte-v1",
+            totalDocuments = documents.Count,
+            totalTokens = documents.Sum(document => document.TokenCount),
+            splits = documents
+                .GroupBy(document => document.Split)
+                .ToDictionary(
+                    group => group.Key,
+                    group => new
+                    {
+                        documents = group.Count(),
+                        tokens = group.Sum(document => document.TokenCount)
+                    },
+                    StringComparer.OrdinalIgnoreCase),
+            composition = documents
+                .GroupBy(document => document.SourceId)
+                .ToDictionary(
+                    group => group.Key,
+                    group => new
+                    {
+                        documents = group.Count(),
+                        tokens = group.Sum(document => document.TokenCount),
+                        license = group.First().License
+                    },
+                    StringComparer.OrdinalIgnoreCase),
+            rejections
+        };
+        var manifestPath = Path.Combine(output, "dataset-manifest.json");
+        await File.WriteAllTextAsync(
+            manifestPath,
+            JsonSerializer.Serialize(manifest, new JsonSerializerOptions(JsonSerializerDefaults.Web) { WriteIndented = true }),
+            cancellationToken);
+
+        Console.WriteLine($"Corpus: {output}");
+        Console.WriteLine($"Documents: {documents.Count:n0}");
+        Console.WriteLine($"Tokens: {documents.Sum(document => document.TokenCount):n0}");
+        Console.WriteLine($"Manifest: {manifestPath}");
+        foreach (var item in manifest.composition)
+        {
+            Console.WriteLine($"{item.Key}: {item.Value.documents:n0} docs, {item.Value.tokens:n0} tokens, {item.Value.license}");
+        }
+
+        return 0;
+    }
+
+    private static bool AcceptDocument(
+        List<LocalCorpusDocument> documents,
+        Dictionary<string, int> rejections,
+        TextNormalizer normalizer,
+        DocumentQualityAnalyzer quality,
+        DocumentDeduplicator deduper,
+        StableSplitAssigner split,
+        ITextTokenizer tokenizer,
+        PendingCorpusDocument pending,
+        bool fastSynthetic = false)
+    {
+        var normalized = normalizer.Normalize(pending.Text);
+        if (!fastSynthetic)
+        {
+            var qualityReport = quality.Analyze(normalized);
+            if (!qualityReport.Accepted)
+            {
+                foreach (var reason in qualityReport.RejectionReasons)
+                {
+                    Increment(rejections, reason);
+                }
+
+                return false;
+            }
+        }
+        else if (normalized.Trim().Length < 20 || normalized.Contains('\uFFFD'))
+        {
+            Increment(rejections, "synthetic_quality_failed");
+            return false;
+        }
+
+        var dedup = pending.SourceId.Equals("owned-synthetic", StringComparison.OrdinalIgnoreCase)
+            ? new DeduplicationDecision(true, pending.Id, pending.Id, null)
+            : deduper.InspectAndRemember(pending.Text, normalized);
+        if (!dedup.Accepted)
+        {
+            Increment(rejections, dedup.RejectionReason ?? "duplicate");
+            return false;
+        }
+
+        var tokenCount = tokenizer.Encode(normalized).Count;
+        documents.Add(new LocalCorpusDocument(
+            pending.SourceId,
+            pending.SourceName,
+            pending.License,
+            pending.Id,
+            pending.Category,
+            split.Assign($"{pending.SourceId}:{pending.Id}"),
+            normalized,
+            tokenCount));
+        return true;
+    }
+
+    private static void EnsureSplitCoverage(List<LocalCorpusDocument> documents)
+    {
+        if (documents.Count < 3)
+        {
+            return;
+        }
+
+        var minimumSplitTokens = Math.Max(1_024, documents.Sum(document => document.TokenCount) / 100);
+        EnsureSplit("validation", minimumSplitTokens);
+        EnsureSplit("test", minimumSplitTokens);
+
+        void EnsureSplit(string splitName, int minimumTokens)
+        {
+            if (documents
+                .Where(document => document.Split.Equals(splitName, StringComparison.OrdinalIgnoreCase))
+                .Sum(document => document.TokenCount) >= minimumTokens)
+            {
+                return;
+            }
+
+            var candidate = documents
+                .Select((document, index) => new { document, index })
+                .Where(item => item.document.Split.Equals("train", StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(item => item.document.TokenCount)
+                .FirstOrDefault();
+            if (candidate is not null)
+            {
+                documents[candidate.index] = candidate.document with { Split = splitName };
+            }
+        }
+    }
+
+    private static IEnumerable<string> EnumerateLocalCorpusFiles(string workspaceRoot)
+    {
+        var roots = new[] { "src", "tests", "docs", "scripts", "data/training" }
+            .Select(root => Path.Combine(workspaceRoot, root))
+            .Where(Directory.Exists);
+        var extensions = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".cs", ".ts", ".html", ".scss", ".css", ".json", ".jsonl", ".md", ".ps1", ".sh", ".csproj", ".sln", ".xml", ".yaml", ".yml"
+        };
+        var blockedDirectories = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ".git", ".vs", ".idea", "bin", "obj", "node_modules", "dist", "coverage", "memory", "uploads", "models", "runs", "tokenizers", "artifacts", "reports"
+        };
+
+        foreach (var root in roots)
+        {
+            foreach (var file in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+                         .OrderBy(path => path, StringComparer.OrdinalIgnoreCase))
+            {
+                var relativeParts = Path.GetRelativePath(workspaceRoot, file)
+                    .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                if (relativeParts.Any(part => blockedDirectories.Contains(part)))
+                {
+                    continue;
+                }
+
+                var info = new FileInfo(file);
+                if (info.Length is <= 0 or > 1_000_000 || !extensions.Contains(info.Extension))
+                {
+                    continue;
+                }
+
+                yield return file;
+            }
+        }
+    }
+
+    private static string BuildOwnedCurriculumDocument(int index, int seed)
+    {
+        var languages = new[] { "C#", "TypeScript", "C++" };
+        var operations = new[] { "add", "subtract", "multiply", "divide", "modulo", "power" };
+        var arabicAliases = new[] { "\u0642\u0633\u0645\u0629", "\u0642\u0633\u0645\u0647", "\u0642\u0645\u0633\u0647", "\u062c\u0645\u0639", "\u0637\u0631\u062d", "\u0636\u0631\u0628" };
+        var builder = new System.Text.StringBuilder();
+        builder.AppendLine($"# Owned Thoth curriculum document {seed}-{index:000000}");
+        builder.AppendLine("License: Thoth-owned. Generated locally from deterministic templates.");
+        builder.AppendLine();
+        for (var item = 0; item < 80; item++)
+        {
+            var language = languages[(index + item + seed) % languages.Length];
+            var op = operations[(index * 7 + item + seed) % operations.Length];
+            var alias = arabicAliases[(index + item * 3 + seed) % arabicAliases.Length];
+            var left = 2 + (index + item) % 97;
+            var right = 1 + (seed + index + item * 5) % 89;
+            builder.AppendLine($"## Scenario {index:000000}-{item:000}");
+            builder.AppendLine($"User: \u0627\u0639\u0645\u0644 method \u0628\u0644\u063a\u0629 {language} \u062a\u062f\u0639\u0645 {alias} \u0648 {op} \u0648\u062a\u062a\u0639\u0627\u0645\u0644 \u0645\u0639 division by zero. \u0645\u062b\u0627\u0644 \u0627\u0644\u0623\u0631\u0642\u0627\u0645 {left} \u0648 {right}.");
+            builder.AppendLine($"Assistant: I will answer directly in {language}, preserve the user's language, avoid internal diagnostics, and handle invalid operators.");
+            builder.AppendLine("```text");
+            builder.AppendLine(BuildCalculatorSnippet(language, op, left, right));
+            builder.AppendLine("```");
+            builder.AppendLine($"Explanation: The function validates the operator, computes {op}, and returns a clear value. It asks for clarification only when required inputs are missing.");
+            builder.AppendLine($"Repair task: If the operator is unknown, return a typed error. If the divisor is zero, throw or return a safe validation result. Case key {seed:x}-{index:x}-{item:x}.");
+            builder.AppendLine($"Concept chain: {BuildUniqueConceptChain(seed, index, item)}");
+            builder.AppendLine();
+        }
+
+        return builder.ToString();
+    }
+
+    private static string BuildUniqueConceptChain(int seed, int documentIndex, int item)
+    {
+        var words = new List<string>(48);
+        for (var offset = 0; offset < 48; offset++)
+        {
+            var value = unchecked(seed * 31 + documentIndex * 131 + item * 17 + offset * 7);
+            words.Add($"topic{Math.Abs(value)}");
+        }
+
+        return string.Join(' ', words);
+    }
+
+    private static string BuildCalculatorSnippet(string language, string operation, int left, int right) =>
+        language switch
+        {
+            "TypeScript" => $"export function calculate(a: number, b: number, op: string): number {{ if (op === \"{operation}\") return a + b + {left} - {right}; if (op === \"/\" && b === 0) throw new Error(\"division by zero\"); throw new Error(\"unknown operator\"); }}",
+            "C++" => $"double calculate(double a, double b, const std::string& op) {{ if (op == \"{operation}\") return a + b + {left} - {right}; if (op == \"/\" && b == 0) throw std::invalid_argument(\"division by zero\"); throw std::invalid_argument(\"unknown operator\"); }}",
+            _ => $"public static decimal Calculate(decimal a, decimal b, string op) => op == \"{operation}\" ? a + b + {left} - {right} : op == \"/\" && b == 0 ? throw new DivideByZeroException() : throw new ArgumentOutOfRangeException(nameof(op));"
+        };
+
+    private static string SanitizeFileName(string value)
+    {
+        var invalid = Path.GetInvalidFileNameChars().ToHashSet();
+        var safe = new string(value.Select(character => invalid.Contains(character) ? '-' : character).ToArray());
+        return safe.Length > 80 ? safe[..80] : safe;
+    }
+
+    private static void Increment(Dictionary<string, int> counts, string key) =>
+        counts[key] = counts.TryGetValue(key, out var value) ? value + 1 : 1;
 
     private static async Task<int> RunMemoryAsync(
         IServiceProvider services,
@@ -1266,6 +1765,7 @@ public static class CliApp
           thoth tokenizer train --data data/training/pretrain --output data/tokenizers/thoth-bpe
                           [--profile smoke|laptop-pilot|laptop-max] [--vocab-size 8000]
                           [--min-frequency 2] [--normalize-nfc]
+          thoth tokenizer compare --bpe6 data/tokenizers/local-bpe-6k --bpe8 data/tokenizers/local-bpe-8k [--json]
           thoth train --data path [--checkpoint path] [--epochs n] [--steps-per-epoch n]
                       [--sequence n] [--embedding n] [--hidden n] [--lr value] [--fresh]
           thoth train --architecture transformer --tokenizer data/tokenizers/thoth-bpe --data data/training/pretrain
@@ -1283,6 +1783,8 @@ public static class CliApp
           thoth data list-sources
           thoth data plan-source --source arwiki|simplewiki|mdn-content|oasst1|curated-code|owned-synthetic [--json]
           thoth data generate-owned [--output data/splits/instruction/train/owned-synthetic.jsonl] [--count n] [--seed n]
+          thoth data build-local-corpus [--output data/splits/local-corpus-v1] [--target-tokens 2000000]
+          thoth data token-count --data data/splits/local-corpus-v1/train --tokenizer data/tokenizers/local-bpe-8k [--json]
           thoth tools list
           thoth memory add "note" [--scope project]
           thoth memory search "query" [--scope project] [--limit n]
@@ -1369,6 +1871,24 @@ public static class CliApp
 
         return $"{value:0.##} {units[unit]}";
     }
+
+    private sealed record PendingCorpusDocument(
+        string SourceId,
+        string SourceName,
+        string License,
+        string Id,
+        string Category,
+        string Text);
+
+    private sealed record LocalCorpusDocument(
+        string SourceId,
+        string SourceName,
+        string License,
+        string Id,
+        string Category,
+        string Split,
+        string Text,
+        int TokenCount);
 
     private sealed record ParsedArguments(
         IReadOnlyDictionary<string, string?> Options,
